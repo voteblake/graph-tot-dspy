@@ -148,12 +148,13 @@ Each ReAct trace reasons about which graph tools to call, self-corrects from err
 ## Citation
 
 ```bibtex
-@misc{graphtot2025,
-  title  = {Grounding LLM Reasoning with Knowledge Graphs},
-  author = {[see paper]},
-  year   = {2025},
-  eprint = {2502.13247},
-  archivePrefix = {arXiv},
-  url    = {https://arxiv.org/abs/2502.13247}
+@misc{amayuelas2025groundingllmreasoningknowledge,
+    title={Grounding LLM Reasoning with Knowledge Graphs},
+    author={Alfonso Amayuelas and Joy Sain and Simerjot Kaur and Charese Smiley},
+    year={2025},
+    eprint={2502.13247},
+    archivePrefix={arXiv},
+    primaryClass={cs.CL},
+    url={https://arxiv.org/abs/2502.13247},
 }
 ```
