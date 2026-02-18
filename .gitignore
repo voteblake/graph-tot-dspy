@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# env vars
+.env
+
+# datasets need to be fetched by users
+data/**/
+
+# generated evaluation output
+results/
+
+# claude-y things
+.claude/*.local.json
