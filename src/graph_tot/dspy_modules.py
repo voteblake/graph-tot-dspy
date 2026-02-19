@@ -290,14 +290,26 @@ class GraphToTSolver(dspy.Module):
         logger.info("ToT Round 0: generating %d branches", self.k)
         current_beam = self._generate_branches(question, contexts=[""] * self.k)
 
+        all_scored: list[Branch] = []  # keep every scored branch for inspection
+        round_log: list[dict] = []  # per-round summaries for observability
+
         for round_idx in range(1, self.max_rounds + 1):
             # Score and prune
             scored_dicts = self.evaluator(
                 question=question,
-                branches=[b.as_dict() for b in current_beam],
+                branches=[{**b.as_dict(), "branch_index": i} for i, b in enumerate(current_beam)],
             )
             current_beam = self._dicts_to_branches(scored_dicts, current_beam)
+            all_scored = current_beam  # snapshot all k scored branches
             survivors = current_beam[: self.b]
+
+            round_log.append({
+                "round": round_idx,
+                "num_branches": len(current_beam),
+                "scores": [b.score for b in current_beam],
+                "survivor_answers": [s.answer[:120] for s in survivors],
+                "context_from_previous": current_beam[0].parent_context[:120] if current_beam[0].parent_context else None,
+            })
 
             logger.info(
                 "ToT Round %d: top-%d scores = %s",
@@ -332,7 +344,8 @@ class GraphToTSolver(dspy.Module):
             answer=best.answer,
             best_trace=best.trace,
             best_score=best.score,
-            all_branches=[b.as_dict() for b in current_beam],
+            all_branches=[b.as_dict() for b in all_scored],
+            round_log=round_log,
         )
 
     # ------------------------------------------------------------------
@@ -361,11 +374,11 @@ class GraphToTSolver(dspy.Module):
     ) -> list[Branch]:
         """Merge scores from evaluator output back into Branch objects."""
         result: list[Branch] = []
-        # evaluator returns scored_dicts in sorted order; match by answer text
-        orig_by_answer = {b.answer: b for b in original_branches}
         for d in scored_dicts:
-            orig = orig_by_answer.get(d.get("answer", ""))
-            if orig is None:
+            idx = d.get("branch_index")
+            if idx is not None and 0 <= idx < len(original_branches):
+                orig = original_branches[idx]
+            else:
                 # Fallback: reconstruct from dict
                 orig = Branch(
                     answer=d.get("answer", ""),
