@@ -56,6 +56,7 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
         api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
+        cache=temperature == 0.0,  # disable cache when sampling for branch diversity
     )
     dspy.configure(lm=lm)
     console.print(f"[green]DSPy configured:[/green] anthropic/{model} (temp={temperature})")
