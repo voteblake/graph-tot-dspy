@@ -131,13 +131,17 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
     help="Run a single demonstration question with verbose output.",
 )
 @click.option(
+    "--parallel/--no-parallel", default=True, show_default=True,
+    help="Generate k branches in parallel using threads (faster) or sequentially.",
+)
+@click.option(
     "--verbose", is_flag=True, default=False,
     help="Enable debug-level logging.",
 )
 def main(
     graph_dir, faiss_cache, output, model, temperature, max_tokens,
     k, b, max_rounds, max_iters, eval_mode,
-    max_samples, level, demo, verbose,
+    max_samples, level, demo, parallel, verbose,
 ):
     """
     Graph Tree-of-Thought QA over the GRBench Healthcare knowledge graph.
@@ -228,14 +232,16 @@ def main(
         max_rounds=max_rounds,
         max_iters=max_iters,
         eval_mode=eval_mode,
+        parallel=parallel,
     )
 
     # ------------------------------------------------------------------
     # Run inference
     # ------------------------------------------------------------------
+    par_str = "parallel" if parallel else "sequential"
     console.print(
         f"\n[bold]Running Graph ToT inference[/bold] "
-        f"(k={k}, b={b}, rounds={max_rounds}, eval={eval_mode})...\n"
+        f"(k={k}, b={b}, rounds={max_rounds}, eval={eval_mode}, {par_str})...\n"
     )
 
     predictions: list[str] = []
