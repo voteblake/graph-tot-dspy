@@ -281,7 +281,7 @@ class GraphToTSolver(dspy.Module):
         Run ToT beam search and return the final answer.
 
         Returns a dspy.Prediction with fields:
-          answer      — final synthesised answer string
+          answer      — answer string from best branch
           best_trace  — reasoning trace from the best-scoring branch
           best_score  — float score of the best branch
           all_branches — list of branch dicts (for logging/inspection)
