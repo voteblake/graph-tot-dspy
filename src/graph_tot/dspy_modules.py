@@ -290,6 +290,8 @@ class GraphToTSolver(dspy.Module):
         logger.info("ToT Round 0: generating %d branches", self.k)
         current_beam = self._generate_branches(question, contexts=[""] * self.k)
 
+        all_scored: list[Branch] = []  # keep every scored branch for inspection
+
         for round_idx in range(1, self.max_rounds + 1):
             # Score and prune
             scored_dicts = self.evaluator(
@@ -297,6 +299,7 @@ class GraphToTSolver(dspy.Module):
                 branches=[{**b.as_dict(), "branch_index": i} for i, b in enumerate(current_beam)],
             )
             current_beam = self._dicts_to_branches(scored_dicts, current_beam)
+            all_scored = current_beam  # snapshot all k scored branches
             survivors = current_beam[: self.b]
 
             logger.info(
@@ -332,7 +335,7 @@ class GraphToTSolver(dspy.Module):
             answer=best.answer,
             best_trace=best.trace,
             best_score=best.score,
-            all_branches=[b.as_dict() for b in current_beam],
+            all_branches=[b.as_dict() for b in all_scored],
         )
 
     # ------------------------------------------------------------------
