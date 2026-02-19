@@ -76,20 +76,6 @@ class SelectionVoteSignature(dspy.Signature):
     )
 
 
-class FinalAnswerSignature(dspy.Signature):
-    """Synthesize a final, concise answer to the medical question based on
-    the best reasoning trace from knowledge graph exploration. Be specific
-    and factual. If the trace identified multiple relevant items, list them."""
-
-    question: str = dspy.InputField(desc="The original medical question.")
-    best_trace: str = dspy.InputField(
-        desc="The reasoning trace and candidate answer from the highest-scoring branch."
-    )
-    final_answer: str = dspy.OutputField(
-        desc="The final concise answer to the question."
-    )
-
-
 # ===========================================================================
 # Branch dataclass
 # ===========================================================================
@@ -259,7 +245,7 @@ class GraphToTSolver(dspy.Module):
       3. Keep the top-b branches (beam pruning).
       4. Optionally repeat for max_rounds rounds (beam expansion), passing each
          survivor's answer as 'context' to the next round's agents.
-      5. Synthesise the final answer from the best branch.
+      5. Return the best branch's answer directly.
 
     Parameters:
       graph_env  : GraphEnvironment instance with the 4 graph tools.
@@ -289,14 +275,13 @@ class GraphToTSolver(dspy.Module):
 
         self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
         self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode)
-        self.synthesizer = dspy.Predict(FinalAnswerSignature)
 
     def forward(self, question: str) -> dspy.Prediction:
         """
         Run ToT beam search and return the final answer.
 
         Returns a dspy.Prediction with fields:
-          answer      — final synthesised answer string
+          answer      — answer string from best branch
           best_trace  — reasoning trace from the best-scoring branch
           best_score  — float score of the best branch
           all_branches — list of branch dicts (for logging/inspection)
@@ -336,28 +321,18 @@ class GraphToTSolver(dspy.Module):
                 )
             current_beam = new_beam
 
-        # Final scoring pass and answer synthesis
-        final_scored = self.evaluator(
-            question=question,
-            branches=[b.as_dict() for b in current_beam],
-        )
-        final_beam = self._dicts_to_branches(final_scored, current_beam)
-        best = final_beam[0] if final_beam else Branch(
+        # Return best branch's answer directly (no synthesis step, per the paper)
+        best = current_beam[0] if current_beam else Branch(
             answer="Unable to determine an answer.",
             trace="",
             prediction=dspy.Prediction(),
         )
 
-        synth = self.synthesizer(
-            question=question,
-            best_trace=f"Reasoning trace:\n{best.trace}\n\nCandidate answer: {best.answer}",
-        )
-
         return dspy.Prediction(
-            answer=synth.final_answer,
+            answer=best.answer,
             best_trace=best.trace,
             best_score=best.score,
-            all_branches=[b.as_dict() for b in final_beam],
+            all_branches=[b.as_dict() for b in current_beam],
         )
 
     # ------------------------------------------------------------------
