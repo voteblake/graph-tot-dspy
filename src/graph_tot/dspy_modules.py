@@ -45,10 +45,10 @@ class GraphQASignature(dspy.Signature):
 
 
 class ScoreVoteSignature(dspy.Signature):
-    """You are evaluating the quality of a knowledge graph reasoning trace.
-    Assess it on: (1) logical soundness of graph traversal steps,
-    (2) completeness and specificity of the answer, (3) direct relevance to
-    the question. Return a single float score."""
+    """Estimate the probability that the given reasoning trace arrives at the
+    correct answer to the question. Consider whether the graph traversal steps
+    logically support the candidate answer and whether the answer is likely
+    correct. Return a single float representing P(correct)."""
 
     question: str = dspy.InputField(desc="The original medical question.")
     reasoning_trace: str = dspy.InputField(
@@ -58,7 +58,7 @@ class ScoreVoteSignature(dspy.Signature):
         desc="The candidate answer produced by this reasoning trace."
     )
     score: float = dspy.OutputField(
-        desc="Quality score from 0.0 (worst) to 1.0 (best)."
+        desc="Probability that this answer is correct, from 0.0 to 1.0."
     )
 
 
@@ -223,7 +223,7 @@ class TreeOfThoughtEvaluator(dspy.Module):
     def _selection_vote(self, question: str, branches: list[dict]) -> list[dict]:
         candidates_text = "\n\n".join(
             f"[{i}] Answer: {b.get('answer', '')}\n"
-            f"    Reasoning: {b.get('trace', '')[:300]}..."
+            f"    Reasoning: {b.get('trace', '')[:2000]}"
             for i, b in enumerate(branches)
         )
         try:
