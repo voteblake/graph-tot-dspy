@@ -294,7 +294,7 @@ class GraphToTSolver(dspy.Module):
             # Score and prune
             scored_dicts = self.evaluator(
                 question=question,
-                branches=[b.as_dict() for b in current_beam],
+                branches=[{**b.as_dict(), "branch_index": i} for i, b in enumerate(current_beam)],
             )
             current_beam = self._dicts_to_branches(scored_dicts, current_beam)
             survivors = current_beam[: self.b]
@@ -361,11 +361,11 @@ class GraphToTSolver(dspy.Module):
     ) -> list[Branch]:
         """Merge scores from evaluator output back into Branch objects."""
         result: list[Branch] = []
-        # evaluator returns scored_dicts in sorted order; match by answer text
-        orig_by_answer = {b.answer: b for b in original_branches}
         for d in scored_dicts:
-            orig = orig_by_answer.get(d.get("answer", ""))
-            if orig is None:
+            idx = d.get("branch_index")
+            if idx is not None and 0 <= idx < len(original_branches):
+                orig = original_branches[idx]
+            else:
                 # Fallback: reconstruct from dict
                 orig = Branch(
                     answer=d.get("answer", ""),
