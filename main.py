@@ -57,6 +57,11 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
         temperature=temperature,
         max_tokens=max_tokens,
         cache=temperature == 0.0,  # disable cache when sampling for branch diversity
+        cache_control_injection_points=[{
+            # Allow for provider side prompt caching for ReAct prompts
+            "location": "message",
+            "role": "system",
+        }],
     )
     dspy.configure(lm=lm)
     console.print(f"[green]DSPy configured:[/green] anthropic/{model} (temp={temperature})")
@@ -245,8 +250,24 @@ def main(
             console.print(f"  [bold]Difficulty:[/bold] {qa.level}")
             console.print(f"  [bold]Best branch score:[/bold] {pred.best_score:.3f}")
 
+            # Show per-round progression for multi-round runs
+            round_log = getattr(pred, "round_log", []) or []
+            if len(round_log) > 1:
+                console.print(f"\n  [bold]Round-by-round progression:[/bold]")
+                for rl in round_log:
+                    ctx = rl.get("context_from_previous")
+                    ctx_str = f"  context=\"{ctx}...\"" if ctx else ""
+                    console.print(
+                        f"    Round {rl['round']}: "
+                        f"{rl['num_branches']} branches, "
+                        f"scores={[f'{s:.3f}' for s in rl['scores']]}"
+                        f"{ctx_str}"
+                    )
+                    for ans in rl.get("survivor_answers", []):
+                        console.print(f"      → survivor: {ans}")
+
             if pred.all_branches:
-                console.print(f"\n  [bold]All {len(pred.all_branches)} branches:[/bold]")
+                console.print(f"\n  [bold]All {len(pred.all_branches)} branches (final round):[/bold]")
                 for idx, br in enumerate(pred.all_branches):
                     console.print(
                         f"    [{idx}] score={br['score']:.3f}  "
