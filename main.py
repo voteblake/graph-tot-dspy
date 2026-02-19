@@ -83,8 +83,9 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
     help="LLM sampling temperature. Use >=0.7 for branch diversity.",
 )
 @click.option(
-    "--max-tokens", default=1024, type=int, show_default=True,
-    help="Max tokens per LLM call.",
+    "--max-tokens", default=2048, type=int, show_default=True,
+    help="Max tokens per LLM call. Scorer calls include full trajectories so "
+         "needs to be higher than you might expect — 2048 is a safe default.",
 )
 @click.option(
     "--k", default=3, type=int, show_default=True,

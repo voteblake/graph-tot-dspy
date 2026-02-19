@@ -70,6 +70,11 @@ in `.env` to suppress.
 **ROUGE-L = 0 on prose answers**: expected when agent hallucinates instead of traversing.
 Gold answers are terse entity lists; prose doesn't overlap. Fixing max-iters resolves this.
 
+**LM response truncated (max_tokens warning)**: truncation happens in the ScoreVoteSignature
+calls, not the agent traces. The scorer prompt includes the full trajectory as `reasoning_trace`,
+which can be long. When cut off, `float(result.score)` fails and defaults to 0.0, corrupting beam
+ranking. Default is 2048; increase further with `--max-tokens 4096` for medium/hard questions.
+
 ## Tuning levers (paper Table 4 correspondence)
 | CLI flag | Paper param | Notes |
 |----------|-------------|-------|
