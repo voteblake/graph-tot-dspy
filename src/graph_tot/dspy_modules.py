@@ -13,7 +13,7 @@ Architecture:
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import dspy
 import litellm
@@ -27,55 +27,42 @@ logger = logging.getLogger(__name__)
 
 
 class GraphQASignature(dspy.Signature):
-    """You are a medical knowledge graph expert. Use the available graph tools
-    to answer questions about diseases, compounds, genes, symptoms, and their
-    relationships. Always start by using retrieve_node to locate relevant
-    entities in the graph, then explore their features and neighbors to build
-    a complete, factual answer. Be precise and cite specific node IDs when
-    possible."""
+    """Answer a question by exploring a domain-specific knowledge graph."""
 
-    question: str = dspy.InputField(
-        desc="The medical question to answer using the knowledge graph."
-    )
+    question: str = dspy.InputField(desc="Question to answer using the knowledge graph.")
     context: str = dspy.InputField(
-        desc="Optional prior reasoning or partial answer from an earlier branch. "
-             "Use this as a starting point and try to improve or verify it.",
+        desc="Prior reasoning from an earlier branch, if available.",
         default="",
     )
     answer: str = dspy.OutputField(
-        desc="A concise, factual answer derived from knowledge graph exploration."
+        desc="Concise, factual answer derived from the knowledge graph."
     )
 
 
 class ScoreVoteSignature(dspy.Signature):
-    """Estimate the probability that the given reasoning trace arrives at the
-    correct answer to the question. Consider whether the graph traversal steps
-    logically support the candidate answer and whether the answer is likely
-    correct. Return a single float representing P(correct)."""
+    """Estimate the probability that a reasoning trace produces the correct answer."""
 
-    question: str = dspy.InputField(desc="The original medical question.")
+    question: str = dspy.InputField(desc="The original question.")
     reasoning_trace: str = dspy.InputField(
-        desc="The full Thought/Action/Observation trace from graph exploration."
+        desc="Thought/Action/Observation trace from graph exploration."
     )
     candidate_answer: str = dspy.InputField(
-        desc="The candidate answer produced by this reasoning trace."
+        desc="The candidate answer to evaluate."
     )
     score: float = dspy.OutputField(
-        desc="Probability that this answer is correct, from 0.0 to 1.0."
+        desc="P(correct) from 0.0 to 1.0."
     )
 
 
 class SelectionVoteSignature(dspy.Signature):
-    """You are selecting the best answer from multiple candidates that each
-    explored a medical knowledge graph. Choose the one that is most correct,
-    complete, and well-supported by the reasoning trace."""
+    """Select the best answer from a set of knowledge-graph-grounded candidates."""
 
-    question: str = dspy.InputField(desc="The original medical question.")
+    question: str = dspy.InputField(desc="The original question.")
     candidates: str = dspy.InputField(
-        desc="Numbered list (0-indexed) of candidate answers with reasoning summaries."
+        desc="Numbered candidate answers with reasoning summaries."
     )
     best_index: int = dspy.OutputField(
-        desc="0-based integer index of the best candidate answer."
+        desc="0-based index of the best candidate."
     )
 
 
@@ -128,15 +115,10 @@ class GraphToTAgent(dspy.Module):
 
     def forward(self, question: str, context: str = "") -> dspy.Prediction:
         """Run the ReAct agent and return a prediction with trajectory."""
-        try:
-            return self.react(question=question, context=context)
-        except litellm.RateLimitError:
-            raise  # let LiteLLM's retry-with-backoff handle rate limits
-        except Exception as exc:
-            logger.warning("GraphToTAgent.forward failed: %s", exc)
-            return dspy.Prediction(answer=f"Agent error: {exc}", trajectory={})
+        return self.react(question=question, context=context)
 
-    def get_trajectory_text(self, prediction: dspy.Prediction) -> str:
+    @staticmethod
+    def get_trajectory_text(prediction: dspy.Prediction) -> str:
         """Format the trajectory dict into a human-readable Thought/Action/Observation log."""
         traj = getattr(prediction, "trajectory", {}) or {}
         if not traj:
@@ -177,16 +159,15 @@ class TreeOfThoughtEvaluator(dspy.Module):
         self.score_voter = dspy.Predict(ScoreVoteSignature)
         self.selection_voter = dspy.Predict(SelectionVoteSignature)
 
-    def forward(self, question: str, branches: list[dict]) -> list[dict]:
-        """
-        Score branches and return them sorted best-first with a 'score' key added.
+    def forward(self, question: str, branches: list[Branch]) -> list[Branch]:
+        """Score branches and return them sorted best-first.
 
         Args:
             question: The original question.
-            branches: List of dicts with keys 'answer', 'trace', 'prediction'.
+            branches: Branch objects to evaluate.
 
         Returns:
-            The same list sorted descending by score, with 'score' added.
+            Branches sorted descending by score.
         """
         if not branches:
             return []
@@ -194,45 +175,51 @@ class TreeOfThoughtEvaluator(dspy.Module):
             return self._score_vote(question, branches)
         return self._selection_vote(question, branches)
 
-    def _score_vote(self, question: str, branches: list[dict]) -> list[dict]:
-        scored: list[dict] = []
+    def _score_vote(self, question: str, branches: list[Branch]) -> list[Branch]:
+        scored: list[Branch] = []
         for branch in branches:
-            try:
-                result = self.score_voter(
-                    question=question,
-                    reasoning_trace=branch.get("trace", ""),
-                    candidate_answer=branch.get("answer", ""),
-                )
-                score = float(result.score)
-                score = max(0.0, min(1.0, score))
-            except Exception as exc:
-                logger.warning("Score vote failed: %s; defaulting to 0.0", exc)
-                score = 0.0
-            scored.append({**branch, "score": score})
-        return sorted(scored, key=lambda x: x["score"], reverse=True)
+            result = self.score_voter(
+                question=question,
+                reasoning_trace=branch.trace,
+                candidate_answer=branch.answer,
+            )
+            # DSPy's typed field guarantees result.score is a float;
+            # clamp to valid probability range.
+            score = max(0.0, min(1.0, result.score))
+            scored.append(Branch(
+                answer=branch.answer,
+                trace=branch.trace,
+                prediction=branch.prediction,
+                score=score,
+                parent_context=branch.parent_context,
+            ))
+        return sorted(scored, key=lambda b: b.score, reverse=True)
 
-    def _selection_vote(self, question: str, branches: list[dict]) -> list[dict]:
+    def _selection_vote(self, question: str, branches: list[Branch]) -> list[Branch]:
         candidates_text = "\n\n".join(
-            f"[{i}] Answer: {b.get('answer', '')}\n"
-            f"    Reasoning: {b.get('trace', '')[:2000]}"
+            f"[{i}] Answer: {b.answer}\n"
+            f"    Reasoning: {b.trace[:2000]}"
             for i, b in enumerate(branches)
         )
-        try:
-            result = self.selection_voter(
-                question=question,
-                candidates=candidates_text,
-            )
-            best_idx = int(result.best_index)
-            best_idx = max(0, min(best_idx, len(branches) - 1))
-        except Exception as exc:
-            logger.warning("Selection vote failed: %s; defaulting to index 0", exc)
-            best_idx = 0
+        result = self.selection_voter(
+            question=question,
+            candidates=candidates_text,
+        )
+        # DSPy's typed field guarantees result.best_index is an int;
+        # clamp to valid index range.
+        best_idx = max(0, min(result.best_index, len(branches) - 1))
 
         scored = [
-            {**b, "score": 1.0 if i == best_idx else 0.0}
+            Branch(
+                answer=b.answer,
+                trace=b.trace,
+                prediction=b.prediction,
+                score=1.0 if i == best_idx else 0.0,
+                parent_context=b.parent_context,
+            )
             for i, b in enumerate(branches)
         ]
-        return sorted(scored, key=lambda x: x["score"], reverse=True)
+        return sorted(scored, key=lambda b: b.score, reverse=True)
 
 
 # ===========================================================================
@@ -305,12 +292,8 @@ class GraphToTSolver(dspy.Module):
         round_log: list[dict] = []  # per-round summaries for observability
 
         for round_idx in range(1, self.max_rounds + 1):
-            # Score and prune
-            scored_dicts = self.evaluator(
-                question=question,
-                branches=[{**b.as_dict(), "branch_index": i} for i, b in enumerate(current_beam)],
-            )
-            current_beam = self._dicts_to_branches(scored_dicts, current_beam)
+            # Score and prune — evaluator accepts and returns Branch objects directly
+            current_beam = self.evaluator(question=question, branches=current_beam)
             all_scored = current_beam  # snapshot all k scored branches
             survivors = current_beam[: self.b]
 
@@ -483,29 +466,3 @@ class GraphToTSolver(dspy.Module):
             # Collect in submission order to keep branch indices stable
             return [f.result() for f in futures]
 
-    def _dicts_to_branches(
-        self,
-        scored_dicts: list[dict],
-        original_branches: list[Branch],
-    ) -> list[Branch]:
-        """Merge scores from evaluator output back into Branch objects."""
-        result: list[Branch] = []
-        for d in scored_dicts:
-            idx = d.get("branch_index")
-            if idx is not None and 0 <= idx < len(original_branches):
-                orig = original_branches[idx]
-            else:
-                # Fallback: reconstruct from dict
-                orig = Branch(
-                    answer=d.get("answer", ""),
-                    trace=d.get("trace", ""),
-                    prediction=dspy.Prediction(),
-                )
-            result.append(Branch(
-                answer=orig.answer,
-                trace=orig.trace,
-                prediction=orig.prediction,
-                score=d.get("score", 0.0),
-                parent_context=orig.parent_context,
-            ))
-        return result
