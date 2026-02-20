@@ -56,6 +56,7 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
         api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
+        num_retries=8,  # litellm caps backoff at 10s; more attempts help span the rate-limit window
         cache=temperature == 0.0,  # disable cache when sampling for branch diversity
         cache_control_injection_points=[{
             # Allow for provider side prompt caching for ReAct prompts
