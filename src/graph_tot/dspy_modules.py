@@ -11,6 +11,7 @@ Architecture:
 """
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -382,15 +383,35 @@ class GraphToTSolver(dspy.Module):
         """Generate branches one at a time using the shared agent instance."""
         branches: list[Branch] = []
         for context in contexts:
-            pred = self.agent(question=question, context=context)
-            trace = self.agent.get_trajectory_text(pred)
-            answer = getattr(pred, "answer", "") or "No answer produced."
-            branches.append(Branch(
-                answer=answer,
-                trace=trace,
-                prediction=pred,
-                parent_context=context,
-            ))
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    pred = self.agent(question=question, context=context)
+                    trace = self.agent.get_trajectory_text(pred)
+                    answer = getattr(pred, "answer", "") or "No answer produced."
+                    branches.append(Branch(
+                        answer=answer,
+                        trace=trace,
+                        prediction=pred,
+                        parent_context=context,
+                    ))
+                    break
+                except litellm.RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait = 60 * (attempt + 1)
+                        logger.warning(
+                            "Rate limited (attempt %d/%d), waiting %ds before retry",
+                            attempt + 1, max_retries, wait,
+                        )
+                        time.sleep(wait)
+                    else:
+                        logger.error("Rate limit retries exhausted")
+                        branches.append(Branch(
+                            answer="Rate limit exceeded — try again later or reduce --k.",
+                            trace="",
+                            prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
+                            parent_context=context,
+                        ))
         return branches
 
     def _generate_single_branch(
@@ -401,19 +422,45 @@ class GraphToTSolver(dspy.Module):
         Creating a dedicated ``GraphToTAgent`` per call avoids sharing any
         mutable DSPy ReAct state across threads while the underlying
         ``GraphEnvironment`` (read-only graph + FAISS index) is safely shared.
+
+        If litellm's built-in retries are exhausted on a rate-limit error,
+        this method retries with longer backoff (60 s, 120 s) appropriate for
+        per-minute token limits before falling back to an error prediction.
         """
         agent = GraphToTAgent(
             graph_env=self.graph_env, max_iters=self.max_iters,
         )
-        pred = agent(question=question, context=context)
-        trace = agent.get_trajectory_text(pred)
-        answer = getattr(pred, "answer", "") or "No answer produced."
-        return Branch(
-            answer=answer,
-            trace=trace,
-            prediction=pred,
-            parent_context=context,
-        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                pred = agent(question=question, context=context)
+                trace = agent.get_trajectory_text(pred)
+                answer = getattr(pred, "answer", "") or "No answer produced."
+                return Branch(
+                    answer=answer,
+                    trace=trace,
+                    prediction=pred,
+                    parent_context=context,
+                )
+            except litellm.RateLimitError:
+                if attempt < max_retries - 1:
+                    wait = 60 * (attempt + 1)  # 60s, 120s
+                    logger.warning(
+                        "Rate limited (attempt %d/%d), waiting %ds before retry",
+                        attempt + 1, max_retries, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.error(
+                        "Rate limit retries exhausted after %d attempts",
+                        max_retries,
+                    )
+                    return Branch(
+                        answer="Rate limit exceeded — try again later or reduce --k.",
+                        trace="",
+                        prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
+                        parent_context=context,
+                    )
 
     def _generate_branches_parallel(
         self, question: str, contexts: list[str],
