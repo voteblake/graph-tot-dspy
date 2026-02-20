@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import dspy
+import litellm
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,8 @@ class GraphToTAgent(dspy.Module):
         """Run the ReAct agent and return a prediction with trajectory."""
         try:
             return self.react(question=question, context=context)
+        except litellm.RateLimitError:
+            raise  # let LiteLLM's retry-with-backoff handle rate limits
         except Exception as exc:
             logger.warning("GraphToTAgent.forward failed: %s", exc)
             return dspy.Prediction(answer=f"Agent error: {exc}", trajectory={})
