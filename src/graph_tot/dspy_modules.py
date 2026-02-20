@@ -11,9 +11,12 @@ Architecture:
 """
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import dspy
+import litellm
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +130,8 @@ class GraphToTAgent(dspy.Module):
         """Run the ReAct agent and return a prediction with trajectory."""
         try:
             return self.react(question=question, context=context)
+        except litellm.RateLimitError:
+            raise  # let LiteLLM's retry-with-backoff handle rate limits
         except Exception as exc:
             logger.warning("GraphToTAgent.forward failed: %s", exc)
             return dspy.Prediction(answer=f"Agent error: {exc}", trajectory={})
@@ -267,11 +272,17 @@ class GraphToTSolver(dspy.Module):
         max_rounds: int = 1,
         max_iters: int = 10,
         eval_mode: str = "score_vote",
+        parallel: bool = True,
     ) -> None:
         super().__init__()
         self.k = k
         self.b = b
         self.max_rounds = max_rounds
+        self.parallel = parallel
+
+        # Store for creating per-thread agent instances in parallel mode
+        self.graph_env = graph_env
+        self.max_iters = max_iters
 
         self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
         self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode)
@@ -353,19 +364,124 @@ class GraphToTSolver(dspy.Module):
     # ------------------------------------------------------------------
 
     def _generate_branches(self, question: str, contexts: list[str]) -> list[Branch]:
-        """Run len(contexts) independent agent calls and return Branch objects."""
+        """Run len(contexts) independent agent calls and return Branch objects.
+
+        When ``self.parallel`` is True and there are multiple contexts, branches
+        are generated concurrently using a :class:`~concurrent.futures.ThreadPoolExecutor`.
+        Each thread gets its own ``GraphToTAgent`` instance to avoid any
+        thread-safety issues with DSPy's internal ReAct state.  The shared
+        ``GraphEnvironment`` is safe to access concurrently since graph lookups
+        and FAISS searches are read-only.
+        """
+        if self.parallel and len(contexts) > 1:
+            return self._generate_branches_parallel(question, contexts)
+        return self._generate_branches_sequential(question, contexts)
+
+    def _generate_branches_sequential(
+        self, question: str, contexts: list[str],
+    ) -> list[Branch]:
+        """Generate branches one at a time using the shared agent instance."""
         branches: list[Branch] = []
         for context in contexts:
-            pred = self.agent(question=question, context=context)
-            trace = self.agent.get_trajectory_text(pred)
-            answer = getattr(pred, "answer", "") or "No answer produced."
-            branches.append(Branch(
-                answer=answer,
-                trace=trace,
-                prediction=pred,
-                parent_context=context,
-            ))
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    pred = self.agent(question=question, context=context)
+                    trace = self.agent.get_trajectory_text(pred)
+                    answer = getattr(pred, "answer", "") or "No answer produced."
+                    branches.append(Branch(
+                        answer=answer,
+                        trace=trace,
+                        prediction=pred,
+                        parent_context=context,
+                    ))
+                    break
+                except litellm.RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait = 60 * (attempt + 1)
+                        logger.warning(
+                            "Rate limited (attempt %d/%d), waiting %ds before retry",
+                            attempt + 1, max_retries, wait,
+                        )
+                        time.sleep(wait)
+                    else:
+                        logger.error("Rate limit retries exhausted")
+                        branches.append(Branch(
+                            answer="Rate limit exceeded — try again later or reduce --k.",
+                            trace="",
+                            prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
+                            parent_context=context,
+                        ))
         return branches
+
+    def _generate_single_branch(
+        self, question: str, context: str,
+    ) -> Branch:
+        """Generate one branch with its own agent instance (thread-safe).
+
+        Creating a dedicated ``GraphToTAgent`` per call avoids sharing any
+        mutable DSPy ReAct state across threads while the underlying
+        ``GraphEnvironment`` (read-only graph + FAISS index) is safely shared.
+
+        If litellm's built-in retries are exhausted on a rate-limit error,
+        this method retries with longer backoff (60 s, 120 s) appropriate for
+        per-minute token limits before falling back to an error prediction.
+        """
+        agent = GraphToTAgent(
+            graph_env=self.graph_env, max_iters=self.max_iters,
+        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                pred = agent(question=question, context=context)
+                trace = agent.get_trajectory_text(pred)
+                answer = getattr(pred, "answer", "") or "No answer produced."
+                return Branch(
+                    answer=answer,
+                    trace=trace,
+                    prediction=pred,
+                    parent_context=context,
+                )
+            except litellm.RateLimitError:
+                if attempt < max_retries - 1:
+                    wait = 60 * (attempt + 1)  # 60s, 120s
+                    logger.warning(
+                        "Rate limited (attempt %d/%d), waiting %ds before retry",
+                        attempt + 1, max_retries, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    logger.error(
+                        "Rate limit retries exhausted after %d attempts",
+                        max_retries,
+                    )
+                    return Branch(
+                        answer="Rate limit exceeded — try again later or reduce --k.",
+                        trace="",
+                        prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
+                        parent_context=context,
+                    )
+
+    def _generate_branches_parallel(
+        self, question: str, contexts: list[str],
+    ) -> list[Branch]:
+        """Generate branches concurrently via ThreadPoolExecutor.
+
+        LLM API calls are I/O-bound, so threads provide near-ideal speed-up
+        (≈ k× wall-clock reduction).  Each thread creates its own
+        ``GraphToTAgent`` to guarantee thread safety.  Results are collected
+        in submission order so branch indices remain deterministic.
+        """
+        logger.info(
+            "Generating %d branches in parallel", len(contexts),
+        )
+        with ThreadPoolExecutor(max_workers=len(contexts)) as pool:
+            futures = [
+                pool.submit(self._generate_single_branch, question, ctx)
+                for ctx in contexts
+            ]
+            # Collect in submission order to keep branch indices stable
+            return [f.result() for f in futures]
 
     def _dicts_to_branches(
         self,
