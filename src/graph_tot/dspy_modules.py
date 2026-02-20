@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 
 class GraphQASignature(dspy.Signature):
-    """Answer a medical question by exploring a biomedical knowledge graph."""
+    """Answer a question by exploring a domain-specific knowledge graph."""
 
-    question: str = dspy.InputField(desc="Medical question to answer.")
+    question: str = dspy.InputField(desc="Question to answer using the knowledge graph.")
     context: str = dspy.InputField(
         desc="Prior reasoning from an earlier branch, if available.",
         default="",
