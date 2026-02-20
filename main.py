@@ -122,6 +122,11 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
     help="Run a single demonstration question with verbose output.",
 )
 @click.option(
+    "--compiled", default=None, type=click.Path(), show_default=True,
+    help="Path to compiled solver state (from optimize.py). Loads optimized "
+         "prompts/demos before inference.",
+)
+@click.option(
     "--parallel/--no-parallel", default=True, show_default=True,
     help="Generate k branches in parallel using threads (faster) or sequentially.",
 )
@@ -132,7 +137,7 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
 def main(
     graph_dir, faiss_cache, output, model, temperature, max_tokens,
     k, b, max_rounds, max_iters, eval_mode,
-    max_samples, level, demo, parallel, verbose,
+    max_samples, level, demo, compiled, parallel, verbose,
 ):
     """
     Graph Tree-of-Thought QA over the GRBench Healthcare knowledge graph.
@@ -225,6 +230,15 @@ def main(
         eval_mode=eval_mode,
         parallel=parallel,
     )
+
+    # ------------------------------------------------------------------
+    # Load compiled state (if provided)
+    # ------------------------------------------------------------------
+    if compiled:
+        from src.graph_tot.optimize import load_compiled_solver
+        console.print(f"\n[bold]Loading compiled state from:[/bold] {compiled}")
+        load_compiled_solver(solver, compiled)
+        console.print("[green]Compiled prompts loaded.[/green]")
 
     # ------------------------------------------------------------------
     # Run inference

@@ -11,22 +11,30 @@ uv run python main.py --demo                         # single Q (shows download 
 uv run python main.py --demo --k 3 --b 1 --max-iters 12   # demo after graph downloaded
 uv run python main.py --level easy --max-samples 20  # batch eval subset
 uv run python main.py --max-samples 0                # full 270-question eval
+
+# Prompt optimization / compilation
+uv run python optimize.py --optimizer BootstrapFewShot --train-size 10   # quick compile
+uv run python optimize.py --optimizer MIPROv2 --auto light               # stronger optimizer
+uv run python main.py --demo --compiled ./compiled/solver.json           # use compiled prompts
 ```
 
 ## Architecture
 ```
 main.py                  Click CLI; configures DSPy with dspy.LM("anthropic/...")
+optimize.py              Click CLI; compiles/optimizes solver prompts via DSPy optimizers
 src/graph_tot/
   graph_env.py           GraphEnvironment: loads graph JSON/pkl, builds FAISS index,
                          exposes 4 bound-method tools for dspy.ReAct
-  dspy_modules.py        4 DSPy Signatures + GraphToTAgent (ReAct) +
+  dspy_modules.py        3 DSPy Signatures + GraphToTAgent (ReAct) +
                          TreeOfThoughtEvaluator + GraphToTSolver (beam search)
   data_loader.py         load_grbench_qa() from HuggingFace PeterJinGo/GRBench;
-                         find_graph_file() with graceful FileNotFoundError
-  evaluate.py            RougeEvaluator (rouge-score), EvalReport with per-level breakdown
+                         find_graph_file(); make_dspy_examples(); train_val_split()
+  evaluate.py            RougeEvaluator, EvalReport, rouge_metric (DSPy-compatible)
+  optimize.py            compile_solver(), load_compiled_solver() — library API
 data/
   healthcare/            graph.json — download from Google Drive (see README)
   cache/                 FAISS index pickle — auto-built on first run (~6 min), reused after
+compiled/                compiled solver state (JSON) — created by optimize.py
 ```
 
 ## Key design decisions
@@ -46,6 +54,12 @@ are pickled to `data/cache/faiss_sentence-transformers_all-mpnet-base-v2.pkl`.
 
 **Branch diversity**: requires `temperature >= 0.7` on the LM. At temperature=0 all k
 branches are identical.
+
+**DSPy compilation**: `compile_solver()` in `src/graph_tot/optimize.py` wraps DSPy's
+prompt optimizers (BootstrapFewShot, MIPROv2, etc.) to bootstrap few-shot demonstrations
+and optimize instructions. Compiled state is saved as JSON via `dspy.Module.save()` and
+loaded via `load_compiled_solver()`. The `rouge_metric()` function in `evaluate.py`
+provides the DSPy-compatible metric `(gold, pred, trace) -> float`.
 
 ## Data
 - QA pairs: HuggingFace `PeterJinGo/GRBench`, name="healthcare", split="test" (270 questions)
@@ -84,6 +98,19 @@ ranking. Default is 2048; increase further with `--max-tokens 4096` for medium/h
 | `--eval-mode score_vote` | Score Vote | paper's primary method |
 | `--eval-mode selection_vote` | Selection Vote | cheaper (1 LLM call vs k) |
 | `--max-iters` | agent steps | paper uses up to 10; 12 safer |
+
+## Compilation / optimization
+| optimize.py flag | Effect |
+|------------------|--------|
+| `--optimizer BootstrapFewShot` | Bootstrap few-shot demos from successful traces |
+| `--optimizer MIPROv2 --auto light` | Bayesian optimization of instructions + demos |
+| `--train-size 20` | Number of training examples (rest used for validation) |
+| `--max-bootstrapped-demos 4` | Max generated demonstrations per predictor |
+| `--max-labeled-demos 16` | Max labeled examples from trainset per predictor |
+| `--save-path ./compiled/solver.json` | Where to save compiled state |
+| `--eval-compiled / --no-eval-compiled` | Evaluate on val set after compilation |
+
+Loading compiled state: `uv run python main.py --compiled ./compiled/solver.json`
 
 ## Dependencies (key)
 - `dspy>=3.1.3` — ReAct, Predict, Signature, LM, configure
