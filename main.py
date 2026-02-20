@@ -37,23 +37,13 @@ def setup_logging(verbose: bool) -> None:
 
 
 def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
-    """Configure DSPy with an Anthropic Claude language model."""
+    """Configure DSPy with a language model."""
     import dspy
 
     load_dotenv()
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        console.print(
-            "[red]Error: ANTHROPIC_API_KEY is not set.[/red]\n"
-            "Add it to a .env file:\n"
-            "  ANTHROPIC_API_KEY=sk-ant-...\n"
-            "or export it in your shell."
-        )
-        sys.exit(1)
 
     lm = dspy.LM(
-        model=f"anthropic/{model}",
-        api_key=api_key,
+        model=f"{model}",
         temperature=temperature,
         max_tokens=max_tokens,
         num_retries=8,  # litellm caps backoff at 10s; more attempts help span the rate-limit window
@@ -65,7 +55,7 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
         }],
     )
     dspy.configure(lm=lm)
-    console.print(f"[green]DSPy configured:[/green] anthropic/{model} (temp={temperature})")
+    console.print(f"[green]DSPy configured:[/green] {model} (temp={temperature})")
 
 
 @click.command()
@@ -82,8 +72,8 @@ def setup_dspy(model: str, temperature: float, max_tokens: int) -> None:
     help="Path to save evaluation results JSON.",
 )
 @click.option(
-    "--model", default="claude-3-5-haiku-20241022", show_default=True,
-    help="Anthropic model ID (without 'anthropic/' prefix).",
+    "--model", default="anthropic/claude-haiku-4-5-20251001", show_default=True,
+    help="Model ID",
 )
 @click.option(
     "--temperature", default=0.7, type=float, show_default=True,
