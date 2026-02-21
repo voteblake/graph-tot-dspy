@@ -302,7 +302,7 @@ class GraphToTSolver(dspy.Module):
                 "num_branches": len(current_beam),
                 "scores": [b.score for b in current_beam],
                 "survivor_answers": [s.answer[:120] for s in survivors],
-                "context_from_previous": current_beam[0].parent_context[:120] if current_beam[0].parent_context else None,
+                "context_from_previous": current_beam[0].parent_context[:120] if current_beam and current_beam[0].parent_context else None,
             })
 
             logger.info(

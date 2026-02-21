@@ -36,3 +36,7 @@ dev = [
     "pytest>=8.0.0",
     "ipython>=8.24.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-ra", "--tb=short"]
