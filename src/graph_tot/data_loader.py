@@ -10,6 +10,7 @@ Graph data (nodes + edges) must be downloaded manually from Google Drive:
 """
 
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -159,6 +160,50 @@ def find_graph_file(graph_dir: str | Path) -> Path:
             graph_dir=graph_dir / "graph.json",
         )
     )
+
+
+def make_dspy_examples(qa_pairs: list[QAPair]) -> list:
+    """Convert QAPair objects into dspy.Example objects for DSPy optimizers.
+
+    Each example has ``question`` as an input field and ``answer`` as the label.
+
+    Args:
+        qa_pairs: List of QAPair objects from :func:`load_grbench_qa`.
+
+    Returns:
+        List of ``dspy.Example`` objects with ``.with_inputs("question")``.
+    """
+    import dspy
+
+    return [
+        dspy.Example(question=qa.question, answer=qa.answer).with_inputs("question")
+        for qa in qa_pairs
+    ]
+
+
+def train_val_split(
+    qa_pairs: list[QAPair],
+    train_frac: float = 0.2,
+    seed: int = 42,
+) -> tuple[list, list]:
+    """Split QAPairs into train/val dspy.Example lists.
+
+    DSPy prompt optimizers work best with small training sets and larger
+    validation sets (the inverse of typical ML).  The default 20/80 split
+    follows the DSPy documentation recommendation.
+
+    Args:
+        qa_pairs:   List of QAPair objects.
+        train_frac: Fraction of data to use for training (default 0.2).
+        seed:       Random seed for reproducible splits.
+
+    Returns:
+        ``(trainset, valset)`` — both are lists of ``dspy.Example``.
+    """
+    shuffled = list(qa_pairs)
+    random.Random(seed).shuffle(shuffled)
+    split_idx = max(1, int(len(shuffled) * train_frac))
+    return make_dspy_examples(shuffled[:split_idx]), make_dspy_examples(shuffled[split_idx:])
 
 
 def check_graph_available(graph_dir: str | Path) -> bool:

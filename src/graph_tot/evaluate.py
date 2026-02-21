@@ -78,6 +78,37 @@ class EvalReport:
         logger.info("Evaluation results saved to %s", output_path)
 
 
+def rouge_metric(gold, pred, trace=None) -> float:
+    """DSPy-compatible metric using ROUGE-L F1.
+
+    Designed for use with DSPy optimizers (``BootstrapFewShot``, ``MIPROv2``,
+    etc.).  Follows the DSPy metric signature ``(gold, pred, trace) -> float``.
+
+    Args:
+        gold:  A ``dspy.Example`` with an ``answer`` field (the reference).
+        pred:  A ``dspy.Prediction`` with an ``answer`` field (the prediction).
+        trace: Optional; provided by DSPy during bootstrapping.  Not used here.
+
+    Returns:
+        ROUGE-L F1 score between 0.0 and 1.0.
+    """
+    return _shared_rouge_evaluator().score_single(
+        prediction=getattr(pred, "answer", "") or "",
+        reference=getattr(gold, "answer", "") or "",
+    )
+
+
+def _shared_rouge_evaluator() -> "RougeEvaluator":
+    """Lazily create a module-level RougeEvaluator to avoid repeated init."""
+    global _ROUGE_EVAL
+    if _ROUGE_EVAL is None:
+        _ROUGE_EVAL = RougeEvaluator()
+    return _ROUGE_EVAL
+
+
+_ROUGE_EVAL: "RougeEvaluator | None" = None
+
+
 class RougeEvaluator:
     """
     Computes ROUGE-L F1 scores using Google's rouge-score library.
