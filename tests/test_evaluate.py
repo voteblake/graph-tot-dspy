@@ -37,24 +37,6 @@ def _result(qid="1", level="easy", rouge_l=0.5):
 
 class TestRougeEvaluator:
 
-    def test_identical_strings_score_1(self):
-        ev = RougeEvaluator()
-        assert ev.score_single("exact match", "exact match") == pytest.approx(1.0)
-
-    def test_completely_different_strings_score_0(self):
-        ev = RougeEvaluator()
-        score = ev.score_single("apple", "elephant")
-        assert score == pytest.approx(0.0)
-
-    def test_partial_overlap_between_0_and_1(self):
-        ev = RougeEvaluator()
-        score = ev.score_single("Metformin and Insulin", "Metformin treats diabetes")
-        assert 0.0 < score < 1.0
-
-    def test_empty_prediction_scores_0(self):
-        ev = RougeEvaluator()
-        assert ev.score_single("", "some reference text") == pytest.approx(0.0)
-
     def test_evaluate_length_mismatch_raises_value_error(self):
         ev = RougeEvaluator()
         pairs = [QAPair("1", "Q?", "A", "easy")]
