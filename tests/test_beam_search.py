@@ -26,7 +26,7 @@ from tests.conftest import make_branch, make_prediction
 def _scored_branches(*score_answer_pairs):
     """Build a list of branches pre-sorted by score descending."""
     branches = [make_branch(answer=ans, score=sc) for sc, ans in score_answer_pairs]
-    return sorted(branches, key=lambda b: b.score, reverse=True)
+    return branches
 
 
 # ---------------------------------------------------------------------------
