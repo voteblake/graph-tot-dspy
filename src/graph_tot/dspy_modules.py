@@ -204,6 +204,7 @@ class TreeOfThoughtEvaluator(dspy.Module):
         whenever truncation occurs.
         """
         limit = self.max_trace_chars_per_candidate
+        limit = 0 if limit < 0 else limit
         if len(trace) > limit:
             trimmed = len(trace) - limit
             logger.warning(
