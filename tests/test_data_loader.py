@@ -9,7 +9,6 @@ import dspy
 import pytest
 
 from src.graph_tot.data_loader import (
-    GRAPH_DRIVE_URL,
     GRAPH_FILE_CANDIDATES,
     QAPair,
     check_graph_available,

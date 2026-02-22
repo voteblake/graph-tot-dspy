@@ -5,13 +5,12 @@ Uses patch("src.graph_tot.dspy_modules.time.sleep") to avoid actual delays.
 litellm.RateLimitError is constructed with the required keyword arguments.
 """
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import dspy
 import litellm
-import pytest
 
-from src.graph_tot.dspy_modules import Branch, GraphToTAgent, GraphToTSolver
+from src.graph_tot.dspy_modules import GraphToTAgent, GraphToTSolver
 
 
 # ---------------------------------------------------------------------------

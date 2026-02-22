@@ -6,10 +6,8 @@ the cache path includes both model name and fingerprint.  No actual graph
 data, sentence-transformers, or FAISS binaries are required.
 """
 
-import os
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 from src.graph_tot.graph_env import _graph_fingerprint
 

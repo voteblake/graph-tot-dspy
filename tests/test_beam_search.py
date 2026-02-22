@@ -9,13 +9,11 @@ All tests use parallel=False (sequential mode) to keep beam search logic
 isolated; parallel dispatch is covered in test_parallel_branches.py.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import dspy
 import pytest
 
-from src.graph_tot.dspy_modules import Branch, GraphToTSolver
-from tests.conftest import make_branch, make_prediction
+from tests.conftest import make_branch
 
 
 # ---------------------------------------------------------------------------

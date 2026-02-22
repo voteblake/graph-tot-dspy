@@ -11,7 +11,6 @@ No LLM calls: score_voter and selection_voter are replaced with MagicMocks.
 
 from unittest.mock import MagicMock
 
-import dspy
 import pytest
 
 from src.graph_tot.dspy_modules import Branch, TreeOfThoughtEvaluator

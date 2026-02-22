@@ -11,7 +11,6 @@ Quick start:
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -264,7 +263,7 @@ def main(
             # Show per-round progression for multi-round runs
             round_log = getattr(pred, "round_log", []) or []
             if len(round_log) > 1:
-                console.print(f"\n  [bold]Round-by-round progression:[/bold]")
+                console.print("\n  [bold]Round-by-round progression:[/bold]")
                 for rl in round_log:
                     ctx = rl.get("context_from_previous")
                     ctx_str = f"  context=\"{ctx}...\"" if ctx else ""

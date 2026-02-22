@@ -7,7 +7,6 @@ ScoreVoteSignature's reasoning_trace field.
 """
 
 import dspy
-import pytest
 
 from src.graph_tot.dspy_modules import GraphToTAgent
 
@@ -79,7 +78,7 @@ class TestGetTrajectoryText:
             "observation_1": "D",
         })
         text = GraphToTAgent.get_trajectory_text(pred)
-        non_empty_lines = [l for l in text.split("\n") if l.strip()]
+        non_empty_lines = [line for line in text.split("\n") if line.strip()]
         assert len(non_empty_lines) == 6
 
     def test_terminates_at_gap_in_thought_keys(self):

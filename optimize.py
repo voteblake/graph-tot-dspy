@@ -292,7 +292,7 @@ def main(
         **optimizer_kwargs,
     )
 
-    console.print(f"\n[green]Compilation complete.[/green]")
+    console.print("\n[green]Compilation complete.[/green]")
     console.print(f"  Compiled state saved to: [bold]{save_path}[/bold]")
 
     # ------------------------------------------------------------------

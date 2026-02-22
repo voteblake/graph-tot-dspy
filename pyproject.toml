@@ -40,6 +40,7 @@ include = ["src/graph_tot"]
 dev = [
     "pytest>=8.0.0",
     "ipython>=8.24.0",
+    "ruff>=0.15.2",
 ]
 
 [tool.pytest.ini_options]

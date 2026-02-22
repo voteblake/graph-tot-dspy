@@ -7,7 +7,6 @@ populates the all_branches field in GraphToTSolver.forward() results.
 
 import json
 
-import dspy
 import pytest
 
 from src.graph_tot.dspy_modules import Branch
