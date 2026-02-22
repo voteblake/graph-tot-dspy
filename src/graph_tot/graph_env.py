@@ -12,8 +12,10 @@ benchmark) and exposes four tool methods compatible with dspy.ReAct:
 The FAISS index is built once and cached to disk for fast subsequent loads.
 """
 
+import hashlib
 import json
 import logging
+import os
 import pickle
 from pathlib import Path
 from typing import Optional
@@ -39,6 +41,23 @@ HEALTHCARE_NODE_TEXT_KEYS: dict[str, list[str]] = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
+
+def _graph_fingerprint(graph_path: str) -> str:
+    """Return a short fingerprint of a graph file for use in cache filenames.
+
+    Combines the path, file size, and modification time into an 8-char hex
+    digest.  This is fast (no file reading) and detects both content changes
+    and file replacement with different size/mtime.  Returns ``"unknown"`` if
+    the file cannot be stat-ed.
+    """
+    try:
+        size = os.path.getsize(graph_path)
+        mtime = os.path.getmtime(graph_path)
+        key = f"{graph_path}:{size}:{mtime}"
+        return hashlib.md5(key.encode()).hexdigest()[:8]
+    except OSError:
+        return "unknown"
 
 
 class GraphEnvironment:
@@ -139,19 +158,40 @@ class GraphEnvironment:
         return " ".join(parts) if parts else node_type
 
     def _build_or_load_faiss_index(self) -> None:
-        """Build FAISS index or load from disk cache."""
+        """Build FAISS index or load from disk cache.
+
+        The cache filename encodes both the embedding model name and a
+        fingerprint of the graph file (path + size + mtime), so that switching
+        graphs or updating the graph file automatically triggers a rebuild
+        rather than silently reusing stale embeddings.
+        """
         import faiss
         from sentence_transformers import SentenceTransformer
 
         self.faiss_cache_dir.mkdir(parents=True, exist_ok=True)
         safe_name = self.embedding_model_name.replace("/", "_")
-        cache_file = self.faiss_cache_dir / f"faiss_{safe_name}.pkl"
+        fingerprint = _graph_fingerprint(str(self.graph_path))
+        cache_file = self.faiss_cache_dir / f"faiss_{safe_name}_{fingerprint}.pkl"
+        logger.info(
+            "FAISS cache key: model=%s graph_fingerprint=%s path=%s",
+            self.embedding_model_name, fingerprint, cache_file,
+        )
 
+        embeddings = None
         if cache_file.exists():
             logger.info("Loading FAISS index from cache: %s", cache_file)
             with open(cache_file, "rb") as f:
-                embeddings = pickle.load(f)
-        else:
+                loaded = pickle.load(f)
+            if len(loaded) != len(self.doc_lookup):
+                logger.warning(
+                    "FAISS cache mismatch: cache has %d embeddings but graph has %d nodes; "
+                    "rebuilding cache at %s",
+                    len(loaded), len(self.doc_lookup), cache_file,
+                )
+            else:
+                embeddings = loaded
+
+        if embeddings is None:
             logger.info(
                 "Building FAISS index for %d nodes (first run — this takes a few minutes)...",
                 len(self.doc_lookup),
