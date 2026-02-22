@@ -14,6 +14,7 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import TypedDict
 
 import dspy
 import litellm
@@ -71,6 +72,15 @@ class SelectionVoteSignature(dspy.Signature):
 # ===========================================================================
 
 
+class BranchDict(TypedDict):
+    """Typed dictionary representation of a Branch, as returned by Branch.as_dict()."""
+
+    answer: str
+    trace: str
+    score: float
+    parent_context: str
+
+
 @dataclass
 class Branch:
     """Represents one complete reasoning trace from a GraphToTAgent run."""
@@ -81,7 +91,7 @@ class Branch:
     score: float = 0.0
     parent_context: str = ""
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> BranchDict:
         return {
             "answer": self.answer,
             "trace": self.trace,
