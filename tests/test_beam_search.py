@@ -331,3 +331,147 @@ class TestForwardOutputSchema:
                 result = solver.forward("Q?")
 
         assert result.best_score == pytest.approx(0.87)
+
+
+# ---------------------------------------------------------------------------
+# Branch history accumulation: all_branches spans all rounds
+# ---------------------------------------------------------------------------
+
+
+class TestBranchHistoryAccumulation:
+    """all_branches must accumulate scored branches across every round."""
+
+    def test_single_round_all_branches_equals_k(self, make_solver):
+        """max_rounds=1, k=3 → all_branches has 3 entries."""
+        solver, _ = make_solver(k=3, b=1, max_rounds=1)
+        branches = [make_branch(answer=f"a{i}", score=0.9 - i * 0.1) for i in range(3)]
+
+        with patch.object(solver, "_generate_branches", return_value=branches):
+            with patch.object(solver.evaluator, "forward", return_value=branches):
+                result = solver.forward("Q?")
+
+        assert len(result.all_branches) == 3
+
+    def test_case_a_k3_b1_max_rounds2_yields_6_branches(self, make_solver):
+        """k=3, b=1, max_rounds=2 → round1: 3 scored + round2: 3 scored = 6 total."""
+        solver, _ = make_solver(k=3, b=1, max_rounds=2)
+        round1_branches = [make_branch(answer=f"r1_{i}", score=0.9 - i * 0.1) for i in range(3)]
+        round2_branches = [make_branch(answer=f"r2_{i}", score=0.8 - i * 0.1) for i in range(3)]
+        gen_call = [0]
+
+        def gen_side(question, contexts):
+            gen_call[0] += 1
+            return round1_branches if gen_call[0] == 1 else round2_branches
+
+        with patch.object(solver, "_generate_branches", side_effect=gen_side):
+            with patch.object(solver.evaluator, "forward", side_effect=[round1_branches, round2_branches]):
+                result = solver.forward("Q?")
+
+        assert len(result.all_branches) == 6
+
+    def test_case_b_k3_b2_max_rounds2_yields_9_branches(self, make_solver):
+        """k=3, b=2, max_rounds=2 → round1: 3 scored + round2: 6 scored = 9 total."""
+        solver, _ = make_solver(k=3, b=2, max_rounds=2)
+        r1 = [make_branch(answer=f"r1_{i}", score=0.9 - i * 0.1) for i in range(3)]
+        # 2 survivors each expand to k=3 → 6 branches in round 2
+        r2 = [make_branch(answer=f"r2_{i}", score=0.8 - i * 0.1) for i in range(6)]
+        gen_calls = []
+
+        def gen_side(question, contexts):
+            gen_calls.append(contexts)
+            if len(gen_calls) == 1:
+                return r1
+            # Each expansion call returns 3 branches
+            offset = (len(gen_calls) - 2) * 3
+            return r2[offset: offset + 3]
+
+        with patch.object(solver, "_generate_branches", side_effect=gen_side):
+            with patch.object(solver.evaluator, "forward", side_effect=[r1, r2]):
+                result = solver.forward("Q?")
+
+        assert len(result.all_branches) == 9
+
+    def test_round_idx_metadata_present(self, make_solver):
+        """Each branch dict must contain round_idx."""
+        solver, _ = make_solver(k=2, b=1, max_rounds=1)
+        branches = [make_branch(answer="a", score=0.9), make_branch(answer="b", score=0.5)]
+
+        with patch.object(solver, "_generate_branches", return_value=branches):
+            with patch.object(solver.evaluator, "forward", return_value=branches):
+                result = solver.forward("Q?")
+
+        for d in result.all_branches:
+            assert "round_idx" in d
+            assert d["round_idx"] == 1
+
+    def test_rank_metadata_present_and_ordered(self, make_solver):
+        """rank field must reflect position in the scored list (0-based)."""
+        solver, _ = make_solver(k=3, b=1, max_rounds=1)
+        branches = [make_branch(answer=f"a{i}", score=0.9 - i * 0.1) for i in range(3)]
+
+        with patch.object(solver, "_generate_branches", return_value=branches):
+            with patch.object(solver.evaluator, "forward", return_value=branches):
+                result = solver.forward("Q?")
+
+        ranks = [d["rank"] for d in result.all_branches]
+        assert ranks == [0, 1, 2]
+
+    def test_is_survivor_marks_top_b_branches(self, make_solver):
+        """is_survivor=True for rank < b, False otherwise."""
+        solver, _ = make_solver(k=3, b=1, max_rounds=1)
+        branches = [make_branch(answer=f"a{i}", score=0.9 - i * 0.1) for i in range(3)]
+
+        with patch.object(solver, "_generate_branches", return_value=branches):
+            with patch.object(solver.evaluator, "forward", return_value=branches):
+                result = solver.forward("Q?")
+
+        survivors = [d for d in result.all_branches if d["is_survivor"]]
+        non_survivors = [d for d in result.all_branches if not d["is_survivor"]]
+        assert len(survivors) == 1
+        assert len(non_survivors) == 2
+        assert survivors[0]["rank"] == 0
+
+    def test_is_survivor_b2_marks_two_branches(self, make_solver):
+        """b=2 → two branches with is_survivor=True."""
+        solver, _ = make_solver(k=3, b=2, max_rounds=1)
+        branches = [make_branch(answer=f"a{i}", score=0.9 - i * 0.1) for i in range(3)]
+
+        with patch.object(solver, "_generate_branches", return_value=branches):
+            with patch.object(solver.evaluator, "forward", return_value=branches):
+                result = solver.forward("Q?")
+
+        survivors = [d for d in result.all_branches if d["is_survivor"]]
+        assert len(survivors) == 2
+
+    def test_multi_round_round_idx_values(self, make_solver):
+        """Branches from round 1 have round_idx=1, from round 2 have round_idx=2."""
+        solver, _ = make_solver(k=2, b=1, max_rounds=2)
+        r1 = [make_branch(answer=f"r1_{i}", score=0.9 - i * 0.2) for i in range(2)]
+        r2 = [make_branch(answer=f"r2_{i}", score=0.8 - i * 0.2) for i in range(2)]
+        gen_calls = [0]
+
+        def gen_side(question, contexts):
+            gen_calls[0] += 1
+            return r1 if gen_calls[0] == 1 else r2
+
+        with patch.object(solver, "_generate_branches", side_effect=gen_side):
+            with patch.object(solver.evaluator, "forward", side_effect=[r1, r2]):
+                result = solver.forward("Q?")
+
+        round_indices = [d["round_idx"] for d in result.all_branches]
+        assert round_indices == [1, 1, 2, 2]
+
+    def test_existing_fields_preserved(self, make_solver):
+        """Backward-compatible: answer, trace, score, parent_context still present."""
+        solver, _ = make_solver(k=1, b=1, max_rounds=1)
+        branch = make_branch(answer="my answer", score=0.75, trace="t", parent_context="ctx")
+
+        with patch.object(solver, "_generate_branches", return_value=[branch]):
+            with patch.object(solver.evaluator, "forward", return_value=[branch]):
+                result = solver.forward("Q?")
+
+        d = result.all_branches[0]
+        assert d["answer"] == "my answer"
+        assert d["score"] == pytest.approx(0.75)
+        assert d["trace"] == "t"
+        assert d["parent_context"] == "ctx"
