@@ -8,7 +8,7 @@ test the pure dictionary-lookup logic of each tool method in isolation.
 
 import pytest
 
-from src.graph_tot.graph_env import GraphEnvironment, HEALTHCARE_NODE_TEXT_KEYS
+from src.graph_tot.graph_env import GraphEnvironment, HEALTHCARE_NODE_TEXT_KEYS, ToolResult, ErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -240,3 +240,151 @@ class TestGetTools:
         tools = env.get_tools()
         names = {t.__name__ for t in tools}
         assert names == {"retrieve_node", "node_feature", "neighbour_check", "node_degree"}
+
+
+# ---------------------------------------------------------------------------
+# ToolResult and ErrorCode: structured variants
+# ---------------------------------------------------------------------------
+
+
+class TestToolResultDataclass:
+
+    def test_tool_result_success(self):
+        r = ToolResult(ok=True, data="value", error_code=None, message="value")
+        assert r.ok is True
+        assert r.data == "value"
+        assert r.error_code is None
+        assert r.message == "value"
+
+    def test_tool_result_error(self):
+        r = ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message="Error: not found")
+        assert r.ok is False
+        assert r.error_code == "NODE_NOT_FOUND"
+
+    def test_error_code_constants_defined(self):
+        assert ErrorCode.NODE_NOT_FOUND == "NODE_NOT_FOUND"
+        assert ErrorCode.FEATURE_NOT_FOUND == "FEATURE_NOT_FOUND"
+        assert ErrorCode.EDGE_TYPE_NOT_FOUND == "EDGE_TYPE_NOT_FOUND"
+        assert ErrorCode.DEGREE_ERROR == "DEGREE_ERROR"
+
+
+class TestNodeFeatureStructured:
+
+    def test_success_returns_ok_true(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_feature_structured("Disease::D001", "name")
+        assert isinstance(r, ToolResult)
+        assert r.ok is True
+        assert r.error_code is None
+        assert r.data == "Diabetes"
+        assert r.message == "Diabetes"
+
+    def test_unknown_node_returns_node_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_feature_structured("FAKE::999", "name")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.NODE_NOT_FOUND
+
+    def test_unknown_feature_returns_feature_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_feature_structured("Disease::D001", "nonexistent")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.FEATURE_NOT_FOUND
+
+    def test_string_wrapper_still_returns_string(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.node_feature("Disease::D001", "name")
+        assert isinstance(result, str)
+        assert result == "Diabetes"
+
+    def test_string_wrapper_error_still_starts_with_error(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.node_feature("FAKE::999", "name")
+        assert isinstance(result, str)
+        assert result.startswith("Error:")
+
+
+class TestNeighbourCheckStructured:
+
+    def test_success_returns_ok_true(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.neighbour_check_structured("Disease::D001", "Compound-treats-Disease")
+        assert isinstance(r, ToolResult)
+        assert r.ok is True
+        assert r.error_code is None
+        assert "Compound::C001" in r.data
+
+    def test_unknown_node_returns_node_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.neighbour_check_structured("FAKE::999", "Compound-treats-Disease")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.NODE_NOT_FOUND
+
+    def test_unknown_edge_type_returns_edge_type_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.neighbour_check_structured("Disease::D001", "BadEdge")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.EDGE_TYPE_NOT_FOUND
+
+    def test_string_wrapper_still_returns_string(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.neighbour_check("Disease::D001", "Compound-treats-Disease")
+        assert isinstance(result, str)
+        assert "Compound::C001" in result
+
+    def test_string_wrapper_error_still_starts_with_error(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.neighbour_check("FAKE::999", "any")
+        assert isinstance(result, str)
+        assert result.startswith("Error:")
+
+
+class TestNodeDegreeStructured:
+
+    def test_success_returns_ok_true(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_degree_structured("Disease::D001", "Compound-treats-Disease")
+        assert isinstance(r, ToolResult)
+        assert r.ok is True
+        assert r.error_code is None
+        assert r.data == "2"
+        assert r.message == "2"
+
+    def test_unknown_node_returns_node_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_degree_structured("FAKE::999", "any-type")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.NODE_NOT_FOUND
+
+    def test_unknown_edge_type_returns_edge_type_not_found(self):
+        env = _make_env(SAMPLE_GRAPH)
+        r = env.node_degree_structured("Disease::D001", "BadEdge")
+        assert r.ok is False
+        assert r.error_code == ErrorCode.EDGE_TYPE_NOT_FOUND
+
+    def test_string_wrapper_still_returns_count_string(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.node_degree("Disease::D001", "Compound-treats-Disease")
+        assert isinstance(result, str)
+        assert result == "2"
+
+    def test_string_wrapper_error_still_starts_with_error(self):
+        env = _make_env(SAMPLE_GRAPH)
+        result = env.node_degree("FAKE::999", "any-type")
+        assert isinstance(result, str)
+        assert result.startswith("Error:")
+
+
+class TestToolResultExported:
+
+    def test_tool_result_importable_from_package(self):
+        from graph_tot import ToolResult as TR
+        assert TR.__name__ == "ToolResult"
+        # Confirm it's usable: create an instance
+        r = TR(ok=True, data="x", error_code=None, message="x")
+        assert r.ok is True
+
+    def test_error_code_importable_from_package(self):
+        from graph_tot import ErrorCode as EC
+        assert EC.__name__ == "ErrorCode"
+        assert EC.NODE_NOT_FOUND == "NODE_NOT_FOUND"

@@ -1,4 +1,4 @@
-from .graph_env import GraphEnvironment
+from .graph_env import GraphEnvironment, ToolResult, ErrorCode
 from .dspy_modules import GraphToTSolver, GraphToTAgent, TreeOfThoughtEvaluator, BranchDict
 from .data_loader import (
     load_grbench_qa, find_graph_file, check_graph_available,
@@ -13,8 +13,10 @@ __all__ = [
     "GraphToTSolver",
     "GraphToTAgent",
     "TreeOfThoughtEvaluator",
-    # Typed return types
+    # Structured tool result types
     "BranchDict",
+    "ToolResult",
+    "ErrorCode",
     # Data loading
     "load_grbench_qa",
     "find_graph_file",
