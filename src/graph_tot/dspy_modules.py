@@ -288,14 +288,21 @@ class GraphToTSolver(dspy.Module):
         logger.info("ToT Round 0: generating %d branches", self.k)
         current_beam = self._generate_branches(question, contexts=[""] * self.k)
 
-        all_scored: list[Branch] = []  # keep every scored branch for inspection
+        all_branch_dicts: list[dict] = []  # accumulate ALL scored branches across all rounds
         round_log: list[dict] = []  # per-round summaries for observability
 
         for round_idx in range(1, self.max_rounds + 1):
             # Score and prune — evaluator accepts and returns Branch objects directly
             current_beam = self.evaluator(question=question, branches=current_beam)
-            all_scored = current_beam  # snapshot all k scored branches
             survivors = current_beam[: self.b]
+
+            # Accumulate scored branches with round-level metadata for inspection
+            for rank, branch in enumerate(current_beam):
+                d = branch.as_dict()
+                d["round_idx"] = round_idx
+                d["rank"] = rank
+                d["is_survivor"] = rank < self.b
+                all_branch_dicts.append(d)
 
             round_log.append({
                 "round": round_idx,
@@ -338,7 +345,7 @@ class GraphToTSolver(dspy.Module):
             answer=best.answer,
             best_trace=best.trace,
             best_score=best.score,
-            all_branches=[b.as_dict() for b in all_scored],
+            all_branches=all_branch_dicts,
             round_log=round_log,
         )
 
