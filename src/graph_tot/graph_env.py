@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import pickle
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -41,6 +42,31 @@ HEALTHCARE_NODE_TEXT_KEYS: dict[str, list[str]] = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
+
+@dataclass
+class ToolResult:
+    """Structured result from a graph tool operation.
+
+    Attributes:
+        ok:         True if the operation succeeded, False on error.
+        data:       The raw result data as a string (empty on error).
+        error_code: A stable error code string from ErrorCode, or None on success.
+        message:    Human-readable result suitable for ReAct prompting.
+    """
+    ok: bool
+    data: str
+    error_code: Optional[str]
+    message: str
+
+
+class ErrorCode:
+    """Stable error code constants for graph tool operations."""
+    NODE_NOT_FOUND = "NODE_NOT_FOUND"
+    FEATURE_NOT_FOUND = "FEATURE_NOT_FOUND"
+    EDGE_TYPE_NOT_FOUND = "EDGE_TYPE_NOT_FOUND"
+    DEGREE_ERROR = "DEGREE_ERROR"
+    INDEX_UNINITIALIZED = "INDEX_UNINITIALIZED"
 
 
 def _graph_fingerprint(graph_path: str) -> str:
@@ -227,21 +253,15 @@ class GraphEnvironment:
     # Tool methods (called by dspy.ReAct)
     # ------------------------------------------------------------------
 
-    def retrieve_node(self, keyword: str) -> str:
-        """Search the knowledge graph for the node most semantically similar to the keyword.
+    # ------------------------------------------------------------------
+    # Structured tool APIs (for programmatic / library consumers)
+    # ------------------------------------------------------------------
 
-        Use this tool first to find the node ID for an entity mentioned in the question.
-        Returns the node ID, its type, and primary features.
-
-        Args:
-            keyword: A natural-language entity name or description to search for
-                     (e.g., 'diabetes mellitus', 'aspirin', 'BRCA1 gene').
-
-        Returns:
-            A string describing the best-matching node: its ID, type, and features.
-        """
+    def retrieve_node_structured(self, keyword: str) -> ToolResult:
+        """Structured variant of retrieve_node; returns a ToolResult object."""
         if self.faiss_index is None or self.embed_model is None:
-            return "Error: FAISS index not initialised."
+            msg = "Error: FAISS index not initialised."
+            return ToolResult(ok=False, data="", error_code=ErrorCode.INDEX_UNINITIALIZED, message=msg)
 
         query_emb = self.embed_model.encode(
             [keyword],
@@ -259,7 +279,78 @@ class GraphEnvironment:
             features = self.graph_index[nid].get("features", {})
             results.append(f"Node ID: {nid} (type: {ntype}). Features: {features}")
 
-        return results[0] if results else f"No node found matching: {keyword!r}"
+        if results:
+            return ToolResult(ok=True, data=results[0], error_code=None, message=results[0])
+        msg = f"No node found matching: {keyword!r}"
+        return ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message=msg)
+
+    def node_feature_structured(self, node_id: str, feature: str) -> ToolResult:
+        """Structured variant of node_feature; returns a ToolResult object."""
+        if node_id not in self.graph_index:
+            msg = f"Error: Node '{node_id}' not found in graph."
+            return ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message=msg)
+        features = self.graph_index[node_id].get("features", {})
+        if feature not in features:
+            msg = (
+                f"Error: Feature '{feature}' not found for node '{node_id}'. "
+                f"Available features: {list(features.keys())}"
+            )
+            return ToolResult(ok=False, data="", error_code=ErrorCode.FEATURE_NOT_FOUND, message=msg)
+        value = str(features[feature])
+        return ToolResult(ok=True, data=value, error_code=None, message=value)
+
+    def neighbour_check_structured(self, node_id: str, neighbor_type: str) -> ToolResult:
+        """Structured variant of neighbour_check; returns a ToolResult object."""
+        if node_id not in self.graph_index:
+            msg = f"Error: Node '{node_id}' not found in graph."
+            return ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message=msg)
+        neighbors = self.graph_index[node_id].get("neighbors", {})
+        if neighbor_type not in neighbors:
+            msg = (
+                f"Error: Neighbor type '{neighbor_type}' not found for '{node_id}'. "
+                f"Available neighbor types: {list(neighbors.keys())}"
+            )
+            return ToolResult(ok=False, data="", error_code=ErrorCode.EDGE_TYPE_NOT_FOUND, message=msg)
+        neighbor_list = neighbors[neighbor_type]
+        if len(neighbor_list) > 20:
+            value = f"{neighbor_list[:20]} ... (and {len(neighbor_list) - 20} more)"
+        else:
+            value = str(neighbor_list)
+        return ToolResult(ok=True, data=value, error_code=None, message=value)
+
+    def node_degree_structured(self, node_id: str, neighbor_type: str) -> ToolResult:
+        """Structured variant of node_degree; returns a ToolResult object."""
+        if node_id not in self.graph_index:
+            msg = f"Error: Node '{node_id}' not found in graph."
+            return ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message=msg)
+        neighbors = self.graph_index[node_id].get("neighbors", {})
+        if neighbor_type not in neighbors:
+            msg = (
+                f"Error: Neighbor type '{neighbor_type}' not found for '{node_id}'. "
+                f"Available neighbor types: {list(neighbors.keys())}"
+            )
+            return ToolResult(ok=False, data="", error_code=ErrorCode.EDGE_TYPE_NOT_FOUND, message=msg)
+        value = str(len(neighbors[neighbor_type]))
+        return ToolResult(ok=True, data=value, error_code=None, message=value)
+
+    # ------------------------------------------------------------------
+    # ReAct-compatible string tool methods (delegate to structured variants)
+    # ------------------------------------------------------------------
+
+    def retrieve_node(self, keyword: str) -> str:
+        """Search the knowledge graph for the node most semantically similar to the keyword.
+
+        Use this tool first to find the node ID for an entity mentioned in the question.
+        Returns the node ID, its type, and primary features.
+
+        Args:
+            keyword: A natural-language entity name or description to search for
+                     (e.g., 'diabetes mellitus', 'aspirin', 'BRCA1 gene').
+
+        Returns:
+            A string describing the best-matching node: its ID, type, and features.
+        """
+        return self.retrieve_node_structured(keyword).message
 
     def node_feature(self, node_id: str, feature: str) -> str:
         """Retrieve a specific attribute of a graph node.
@@ -273,15 +364,7 @@ class GraphEnvironment:
         Returns:
             The feature value as a string, or an error listing available features.
         """
-        if node_id not in self.graph_index:
-            return f"Error: Node '{node_id}' not found in graph."
-        features = self.graph_index[node_id].get("features", {})
-        if feature not in features:
-            return (
-                f"Error: Feature '{feature}' not found for node '{node_id}'. "
-                f"Available features: {list(features.keys())}"
-            )
-        return str(features[feature])
+        return self.node_feature_structured(node_id, feature).message
 
     def neighbour_check(self, node_id: str, neighbor_type: str) -> str:
         """List the neighbors of a graph node filtered by relationship type.
@@ -297,18 +380,7 @@ class GraphEnvironment:
         Returns:
             A list of neighboring node IDs, or an error listing available neighbor types.
         """
-        if node_id not in self.graph_index:
-            return f"Error: Node '{node_id}' not found in graph."
-        neighbors = self.graph_index[node_id].get("neighbors", {})
-        if neighbor_type not in neighbors:
-            return (
-                f"Error: Neighbor type '{neighbor_type}' not found for '{node_id}'. "
-                f"Available neighbor types: {list(neighbors.keys())}"
-            )
-        neighbor_list = neighbors[neighbor_type]
-        if len(neighbor_list) > 20:
-            return f"{neighbor_list[:20]} ... (and {len(neighbor_list) - 20} more)"
-        return str(neighbor_list)
+        return self.neighbour_check_structured(node_id, neighbor_type).message
 
     def node_degree(self, node_id: str, neighbor_type: str) -> str:
         """Count the number of neighbors of a given relationship type for a node.
@@ -324,15 +396,7 @@ class GraphEnvironment:
         Returns:
             The integer count as a string, or an error listing available neighbor types.
         """
-        if node_id not in self.graph_index:
-            return f"Error: Node '{node_id}' not found in graph."
-        neighbors = self.graph_index[node_id].get("neighbors", {})
-        if neighbor_type not in neighbors:
-            return (
-                f"Error: Neighbor type '{neighbor_type}' not found for '{node_id}'. "
-                f"Available neighbor types: {list(neighbors.keys())}"
-            )
-        return str(len(neighbors[neighbor_type]))
+        return self.node_degree_structured(node_id, neighbor_type).message
 
     def get_tools(self) -> list:
         """Return the list of bound tool methods for use with dspy.ReAct."""
