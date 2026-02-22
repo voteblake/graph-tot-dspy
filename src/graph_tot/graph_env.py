@@ -66,6 +66,7 @@ class ErrorCode:
     FEATURE_NOT_FOUND = "FEATURE_NOT_FOUND"
     EDGE_TYPE_NOT_FOUND = "EDGE_TYPE_NOT_FOUND"
     DEGREE_ERROR = "DEGREE_ERROR"
+    INDEX_UNINITIALIZED = "INDEX_UNINITIALIZED"
 
 
 def _graph_fingerprint(graph_path: str) -> str:
@@ -260,7 +261,7 @@ class GraphEnvironment:
         """Structured variant of retrieve_node; returns a ToolResult object."""
         if self.faiss_index is None or self.embed_model is None:
             msg = "Error: FAISS index not initialised."
-            return ToolResult(ok=False, data="", error_code=ErrorCode.NODE_NOT_FOUND, message=msg)
+            return ToolResult(ok=False, data="", error_code=ErrorCode.INDEX_UNINITIALIZED, message=msg)
 
         query_emb = self.embed_model.encode(
             [keyword],
