@@ -15,7 +15,7 @@ from src.graph_tot.graph_env import GraphEnvironment, HEALTHCARE_NODE_TEXT_KEYS,
 # ---------------------------------------------------------------------------
 
 
-def _make_env(graph_index: dict = None):
+def _make_env(graph_index: dict | None = None):
     """Bypass __init__; inject graph_index and the other attributes tool methods read."""
     env = object.__new__(GraphEnvironment)
     env.graph_index = graph_index or {}

@@ -74,6 +74,29 @@ class TestScoreVoteMode:
         ev.forward("Q?", branches)
         assert ev.score_voter.call_count == 4
 
+    def test_no_answer_produced_gets_zero_without_calling_scorer(self):
+        # A branch whose agent returned nothing should be hard-zeroed; the LLM
+        # scorer must never see it because a good reasoning trace can fool it
+        # into awarding a high score despite no answer being present.
+        ev = self._evaluator()
+        ev.score_voter = MagicMock(return_value=MagicMock(score=0.99))
+        branch = make_branch(answer="No answer produced.", trace="very detailed trace")
+        result = ev.forward("Q?", [branch])
+        assert result[0].score == pytest.approx(0.0)
+        ev.score_voter.assert_not_called()
+
+    def test_no_answer_produced_sorted_behind_real_answer(self):
+        # Even if the scorer would naively rank the sentinel branch first,
+        # the hard-zero must force it to the bottom.
+        ev = self._evaluator()
+        # Scorer returns 0.97 for anything it is called with (simulates the bug)
+        ev.score_voter = MagicMock(return_value=MagicMock(score=0.97))
+        sentinel = make_branch(answer="No answer produced.", trace="great trace")
+        real = make_branch(answer="Conjunctivitis, Chemical burn")
+        result = ev.forward("Q?", [sentinel, real])
+        assert result[0].answer != "No answer produced."
+        assert result[-1].answer == "No answer produced."
+
     def test_original_branch_answer_preserved(self):
         ev = self._evaluator()
         pred = make_prediction("original")

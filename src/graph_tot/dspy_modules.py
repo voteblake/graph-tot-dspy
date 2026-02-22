@@ -189,14 +189,19 @@ class TreeOfThoughtEvaluator(dspy.Module):
     def _score_vote(self, question: str, branches: list[Branch]) -> list[Branch]:
         scored: list[Branch] = []
         for branch in branches:
-            result = self.score_voter(
-                question=question,
-                reasoning_trace=branch.trace,
-                candidate_answer=branch.answer,
-            )
-            # DSPy's typed field guarantees result.score is a float;
-            # clamp to valid probability range.
-            score = max(0.0, min(1.0, result.score))
+            # Short-circuit: an agent that produced no answer cannot be correct,
+            # regardless of how good its reasoning trace looks to the scorer.
+            if branch.answer == "No answer produced.":
+                score = 0.0
+            else:
+                result = self.score_voter(
+                    question=question,
+                    reasoning_trace=branch.trace,
+                    candidate_answer=branch.answer,
+                )
+                # DSPy's typed field guarantees result.score is a float;
+                # clamp to valid probability range.
+                score = max(0.0, min(1.0, result.score))
             scored.append(Branch(
                 answer=branch.answer,
                 trace=branch.trace,
@@ -481,6 +486,7 @@ class GraphToTSolver(dspy.Module):
                         prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
                         parent_context=context,
                     )
+        raise RuntimeError("_generate_single_branch: exhausted retries without returning")
 
     def _generate_branches_parallel(
         self, question: str, contexts: list[str],

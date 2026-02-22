@@ -13,7 +13,7 @@ from src.graph_tot.dspy_modules import Branch, GraphToTAgent, GraphToTSolver
 # ---------------------------------------------------------------------------
 
 
-def make_prediction(answer: str = "test answer", trajectory: dict = None) -> dspy.Prediction:
+def make_prediction(answer: str = "test answer", trajectory: dict | None = None) -> dspy.Prediction:
     """Create a dspy.Prediction with an optional trajectory dict."""
     return dspy.Prediction(answer=answer, trajectory=trajectory or {})
 

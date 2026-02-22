@@ -41,8 +41,12 @@ dev = [
     "pytest>=8.0.0",
     "ipython>=8.24.0",
     "ruff>=0.15.2",
+    "ty>=0.0.18",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra", "--tb=short"]
+
+[tool.ty.environment]
+extra-paths = ["stubs"]
