@@ -151,11 +151,12 @@ class TreeOfThoughtEvaluator(dspy.Module):
       selection_vote — one LLM call selects the best branch by index
     """
 
-    def __init__(self, mode: str = "score_vote") -> None:
+    def __init__(self, mode: str = "score_vote", max_trace_chars_per_candidate: int = 2000) -> None:
         super().__init__()
         if mode not in ("score_vote", "selection_vote"):
             raise ValueError("mode must be 'score_vote' or 'selection_vote'")
         self.mode = mode
+        self.max_trace_chars_per_candidate = max_trace_chars_per_candidate
         self.score_voter = dspy.Predict(ScoreVoteSignature)
         self.selection_voter = dspy.Predict(SelectionVoteSignature)
 
@@ -195,10 +196,27 @@ class TreeOfThoughtEvaluator(dspy.Module):
             ))
         return sorted(scored, key=lambda b: b.score, reverse=True)
 
+    def _truncate_trace(self, trace: str) -> str:
+        """Truncate a trace to the configured char budget, preserving the tail.
+
+        Taking the last N chars keeps the final answer and most recent reasoning
+        steps, which are the most informative for selection.  A warning is logged
+        whenever truncation occurs.
+        """
+        limit = self.max_trace_chars_per_candidate
+        if len(trace) > limit:
+            trimmed = len(trace) - limit
+            logger.warning(
+                "selection_vote: branch trace truncated by %d chars (limit=%d)",
+                trimmed, limit,
+            )
+            return trace[-limit:]
+        return trace
+
     def _selection_vote(self, question: str, branches: list[Branch]) -> list[Branch]:
         candidates_text = "\n\n".join(
             f"[{i}] Answer: {b.answer}\n"
-            f"    Reasoning: {b.trace[:2000]}"
+            f"    Reasoning: {self._truncate_trace(b.trace)}"
             for i, b in enumerate(branches)
         )
         result = self.selection_voter(
@@ -260,6 +278,7 @@ class GraphToTSolver(dspy.Module):
         max_iters: int = 10,
         eval_mode: str = "score_vote",
         parallel: bool = True,
+        max_trace_chars_per_candidate: int = 2000,
     ) -> None:
         super().__init__()
         self.k = k
@@ -272,7 +291,7 @@ class GraphToTSolver(dspy.Module):
         self.max_iters = max_iters
 
         self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
-        self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode)
+        self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode, max_trace_chars_per_candidate=max_trace_chars_per_candidate)
 
     def forward(self, question: str) -> dspy.Prediction:
         """
