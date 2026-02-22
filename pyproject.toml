@@ -31,10 +31,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/graph_tot"]
 # py.typed (PEP 561) is automatically included by hatchling via packages above.
-# The sdist section lists it explicitly so sdist tools also pick it up.
+# Keep sdist aligned with wheel so source installs include package modules.
 
 [tool.hatch.build.targets.sdist]
-include = ["src/graph_tot/py.typed"]
+include = ["src/graph_tot"]
 
 [dependency-groups]
 dev = [
