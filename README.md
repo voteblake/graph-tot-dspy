@@ -186,8 +186,9 @@ This package now exposes:
 - `GraphToolInterface` — protocol describing that tool contract
 - `GraphNodeStore` — abstract loader for node data from any source
 - `JsonPickleGraphStore` — default implementation for current GRBench JSON/pickle files
+- `RdfOwlXmlGraphStore` — built-in implementation for `.rdf` / `.owl` / RDF XML files
 
-So you can integrate domain-specific backends such as Neo4j, RDF/OWL parsers, or custom services by implementing a `GraphNodeStore` (or directly implementing `GraphToolInterface`).
+So you can integrate domain-specific backends such as Neo4j or custom services by implementing a `GraphNodeStore` (or directly implementing `GraphToolInterface`).
 
 ```python
 from graph_tot import GraphEnvironment, GraphNodeStore

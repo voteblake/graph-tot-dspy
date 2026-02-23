@@ -5,6 +5,7 @@ from .graph_env import (
     GraphToolInterface,
     GraphNodeStore,
     JsonPickleGraphStore,
+    RdfOwlXmlGraphStore,
 )
 from .dspy_modules import GraphToTSolver, GraphToTAgent, TreeOfThoughtEvaluator, BranchDict
 from .data_loader import (
@@ -27,6 +28,7 @@ __all__ = [
     "GraphToolInterface",
     "GraphNodeStore",
     "JsonPickleGraphStore",
+    "RdfOwlXmlGraphStore",
     # Data loading
     "load_grbench_qa",
     "find_graph_file",

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import pickle
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from abc import ABC, abstractmethod
@@ -43,6 +44,9 @@ HEALTHCARE_NODE_TEXT_KEYS: dict[str, list[str]] = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
+RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#"
 
 
 @dataclass
@@ -154,6 +158,98 @@ class JsonPickleGraphStore(GraphNodeStore):
                 yield node_id, node_type, node_data
 
 
+class RdfOwlXmlGraphStore(GraphNodeStore):
+    """GraphNodeStore implementation for RDF/XML and OWL XML files."""
+
+    def __init__(self, graph_path: str | Path) -> None:
+        self.graph_path = Path(graph_path)
+        self.graph: dict[str, dict[str, dict[str, Any]]] = {}
+        self._load()
+
+    @property
+    def identity(self) -> str:
+        return str(self.graph_path)
+
+    @staticmethod
+    def _local_name(tag: str) -> str:
+        return tag.split("}", 1)[-1] if "}" in tag else tag
+
+    @staticmethod
+    def _normalize_resource_id(raw_id: str) -> str:
+        if "#" in raw_id:
+            return raw_id.rsplit("#", 1)[-1]
+        return raw_id.rstrip("/").rsplit("/", 1)[-1]
+
+    def _load(self) -> None:
+        if not self.graph_path.exists():
+            raise FileNotFoundError(f"RDF/OWL file not found: {self.graph_path}")
+
+        tree = ET.parse(self.graph_path)
+        root = tree.getroot()
+
+        rdf_about = f"{{{RDF_NS}}}about"
+        rdf_id = f"{{{RDF_NS}}}ID"
+        rdf_resource = f"{{{RDF_NS}}}resource"
+        rdfs_label = f"{{{RDFS_NS}}}label"
+
+        for elem in root.iter():
+            subject = elem.attrib.get(rdf_about) or elem.attrib.get(rdf_id)
+            if not subject:
+                continue
+
+            node_id = self._normalize_resource_id(subject)
+            node_type = self._local_name(elem.tag)
+            if node_type == "Description":
+                node_type = "Resource"
+
+            features: dict[str, Any] = {"uri": subject}
+            neighbors: dict[str, list[str]] = {}
+
+            labels = [
+                (child.text or "").strip()
+                for child in elem
+                if child.tag == rdfs_label and (child.text or "").strip()
+            ]
+            if labels:
+                features["name"] = labels[0]
+                features["labels"] = labels
+
+            for child in elem:
+                pred = self._local_name(child.tag)
+                if pred == "label":
+                    continue
+                obj = child.attrib.get(rdf_resource)
+                if obj:
+                    neighbors.setdefault(pred, []).append(self._normalize_resource_id(obj))
+                    continue
+                lit = (child.text or "").strip()
+                if lit:
+                    if pred in features:
+                        if isinstance(features[pred], list):
+                            features[pred].append(lit)
+                        else:
+                            features[pred] = [features[pred], lit]
+                    else:
+                        features[pred] = lit
+
+            self.graph.setdefault(node_type, {})[node_id] = {
+                "features": features,
+                "neighbors": neighbors,
+            }
+
+    def iter_nodes(self) -> Iterable[tuple[str, str, dict[str, Any]]]:
+        for node_type, nodes in self.graph.items():
+            for node_id, node_data in nodes.items():
+                yield node_id, node_type, node_data
+
+
+def _make_default_node_store(graph_path: Path) -> GraphNodeStore:
+    """Infer a default GraphNodeStore from file extension."""
+    if graph_path.suffix.lower() in {".rdf", ".owl", ".xml"}:
+        return RdfOwlXmlGraphStore(graph_path)
+    return JsonPickleGraphStore(graph_path)
+
+
 def _graph_fingerprint(graph_path: str) -> str:
     """Return a short fingerprint of a graph file for use in cache filenames.
 
@@ -175,9 +271,9 @@ class GraphEnvironment:
     """
     Wraps a graph backend and exposes four ReAct-compatible tool methods.
 
-    By default, it uses JsonPickleGraphStore for the GRBench JSON/pickle schema.
-    You can pass a custom GraphNodeStore to load nodes from other sources
-    (e.g., Neo4j, RDF/OWL parsers, or remote APIs).
+    By default, it uses JsonPickleGraphStore for JSON/pickle files and
+    RdfOwlXmlGraphStore for .rdf/.owl/.xml files. You can also pass a custom
+    GraphNodeStore to load nodes from other sources (e.g., Neo4j or APIs).
 
     A FAISS index over node-name embeddings is built on first use and cached.
     """
@@ -196,7 +292,7 @@ class GraphEnvironment:
         self.faiss_cache_dir = Path(faiss_cache_dir)
         self.embedding_model_name = embedding_model
         self.top_k = top_k
-        self.node_store = node_store or JsonPickleGraphStore(self.graph_path)
+        self.node_store = node_store or _make_default_node_store(self.graph_path)
 
         # Will be populated by _load_graph()
         self.graph: dict = {}
