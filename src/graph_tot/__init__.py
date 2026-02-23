@@ -1,4 +1,12 @@
-from .graph_env import GraphEnvironment, ToolResult, ErrorCode
+from .graph_env import (
+    GraphEnvironment,
+    ToolResult,
+    ErrorCode,
+    GraphToolInterface,
+    GraphNodeStore,
+    JsonPickleGraphStore,
+    RdfOwlXmlGraphStore,
+)
 from .dspy_modules import GraphToTSolver, GraphToTAgent, TreeOfThoughtEvaluator, BranchDict
 from .data_loader import (
     load_grbench_qa, find_graph_file, check_graph_available,
@@ -17,6 +25,10 @@ __all__ = [
     "BranchDict",
     "ToolResult",
     "ErrorCode",
+    "GraphToolInterface",
+    "GraphNodeStore",
+    "JsonPickleGraphStore",
+    "RdfOwlXmlGraphStore",
     # Data loading
     "load_grbench_qa",
     "find_graph_file",

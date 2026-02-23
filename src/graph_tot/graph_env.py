@@ -17,9 +17,11 @@ import json
 import logging
 import os
 import pickle
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from abc import ABC, abstractmethod
+from typing import Any, Iterable, Optional, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -42,6 +44,9 @@ HEALTHCARE_NODE_TEXT_KEYS: dict[str, list[str]] = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
+
+RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDFS_NS = "http://www.w3.org/2000/01/rdf-schema#"
 
 
 @dataclass
@@ -69,6 +74,182 @@ class ErrorCode:
     INDEX_UNINITIALIZED = "INDEX_UNINITIALIZED"
 
 
+@runtime_checkable
+class GraphToolInterface(Protocol):
+    """Interface for graph backends consumable by GraphToTAgent.
+
+    Users can bring their own graph implementation (Neo4j, RDF/OWL, APIs, etc.)
+    by implementing this protocol and passing the instance to GraphToTSolver.
+    """
+
+    def retrieve_node(self, keyword: str) -> str:
+        ...
+
+    def node_feature(self, node_id: str, feature: str) -> str:
+        ...
+
+    def neighbour_check(self, node_id: str, neighbor_type: str) -> str:
+        ...
+
+    def node_degree(self, node_id: str, neighbor_type: str) -> str:
+        ...
+
+    def get_tools(self) -> list:
+        ...
+
+
+class GraphNodeStore(ABC):
+    """Abstract adapter for loading graph nodes from arbitrary sources.
+
+    Implementations can read from local files, databases, or remote services.
+    """
+
+    @property
+    @abstractmethod
+    def identity(self) -> str:
+        """Stable identity used for cache keying (path, URI, version, etc.)."""
+
+    @abstractmethod
+    def iter_nodes(self) -> Iterable[tuple[str, str, dict[str, Any]]]:
+        """Yield (node_id, node_type, node_data) tuples for all graph nodes."""
+
+
+class JsonPickleGraphStore(GraphNodeStore):
+    """GraphNodeStore implementation for the current GRBench JSON/pickle schema."""
+
+    def __init__(self, graph_path: str | Path) -> None:
+        self.graph_path = Path(graph_path)
+        self.graph: dict[str, Any] = {}
+        self._load()
+
+    @property
+    def identity(self) -> str:
+        return str(self.graph_path)
+
+    def _load(self) -> None:
+        if not self.graph_path.exists():
+            raise FileNotFoundError(
+                f"Graph file not found: {self.graph_path}\n"
+                "Download the healthcare graph from:\n"
+                "  https://drive.google.com/drive/folders/1DJIgRZ3G-TOf7h0-Xub5_sE4slBUEqy9\n"
+                f"Then place it at: {self.graph_path}"
+            )
+
+        suffix = self.graph_path.suffix.lower()
+        if suffix == ".json":
+            with open(self.graph_path, "r", encoding="utf-8") as f:
+                self.graph = json.load(f)
+        elif suffix in (".pkl", ".pickle"):
+            with open(self.graph_path, "rb") as f:
+                self.graph = pickle.load(f)
+        else:
+            try:
+                with open(self.graph_path, "r", encoding="utf-8") as f:
+                    self.graph = json.load(f)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                with open(self.graph_path, "rb") as f:
+                    self.graph = pickle.load(f)
+
+    def iter_nodes(self) -> Iterable[tuple[str, str, dict[str, Any]]]:
+        for node_type, nodes in self.graph.items():
+            if not isinstance(nodes, dict):
+                continue
+            for node_id, node_data in nodes.items():
+                yield node_id, node_type, node_data
+
+
+class RdfOwlXmlGraphStore(GraphNodeStore):
+    """GraphNodeStore implementation for RDF/XML and OWL XML files."""
+
+    def __init__(self, graph_path: str | Path) -> None:
+        self.graph_path = Path(graph_path)
+        self.graph: dict[str, dict[str, dict[str, Any]]] = {}
+        self._load()
+
+    @property
+    def identity(self) -> str:
+        return str(self.graph_path)
+
+    @staticmethod
+    def _local_name(tag: str) -> str:
+        return tag.split("}", 1)[-1] if "}" in tag else tag
+
+    @staticmethod
+    def _normalize_resource_id(raw_id: str) -> str:
+        if "#" in raw_id:
+            return raw_id.rsplit("#", 1)[-1]
+        return raw_id.rstrip("/").rsplit("/", 1)[-1]
+
+    def _load(self) -> None:
+        if not self.graph_path.exists():
+            raise FileNotFoundError(f"RDF/OWL file not found: {self.graph_path}")
+
+        tree = ET.parse(self.graph_path)
+        root = tree.getroot()
+
+        rdf_about = f"{{{RDF_NS}}}about"
+        rdf_id = f"{{{RDF_NS}}}ID"
+        rdf_resource = f"{{{RDF_NS}}}resource"
+        rdfs_label = f"{{{RDFS_NS}}}label"
+
+        for elem in root.iter():
+            subject = elem.attrib.get(rdf_about) or elem.attrib.get(rdf_id)
+            if not subject:
+                continue
+
+            node_id = self._normalize_resource_id(subject)
+            node_type = self._local_name(elem.tag)
+            if node_type == "Description":
+                node_type = "Resource"
+
+            features: dict[str, Any] = {"uri": subject}
+            neighbors: dict[str, list[str]] = {}
+
+            labels = [
+                (child.text or "").strip()
+                for child in elem
+                if child.tag == rdfs_label and (child.text or "").strip()
+            ]
+            if labels:
+                features["name"] = labels[0]
+                features["labels"] = labels
+
+            for child in elem:
+                pred = self._local_name(child.tag)
+                if pred == "label":
+                    continue
+                obj = child.attrib.get(rdf_resource)
+                if obj:
+                    neighbors.setdefault(pred, []).append(self._normalize_resource_id(obj))
+                    continue
+                lit = (child.text or "").strip()
+                if lit:
+                    if pred in features:
+                        if isinstance(features[pred], list):
+                            features[pred].append(lit)
+                        else:
+                            features[pred] = [features[pred], lit]
+                    else:
+                        features[pred] = lit
+
+            self.graph.setdefault(node_type, {})[node_id] = {
+                "features": features,
+                "neighbors": neighbors,
+            }
+
+    def iter_nodes(self) -> Iterable[tuple[str, str, dict[str, Any]]]:
+        for node_type, nodes in self.graph.items():
+            for node_id, node_data in nodes.items():
+                yield node_id, node_type, node_data
+
+
+def _make_default_node_store(graph_path: Path) -> GraphNodeStore:
+    """Infer a default GraphNodeStore from file extension."""
+    if graph_path.suffix.lower() in {".rdf", ".owl", ".xml"}:
+        return RdfOwlXmlGraphStore(graph_path)
+    return JsonPickleGraphStore(graph_path)
+
+
 def _graph_fingerprint(graph_path: str) -> str:
     """Return a short fingerprint of a graph file for use in cache filenames.
 
@@ -88,26 +269,30 @@ def _graph_fingerprint(graph_path: str) -> str:
 
 class GraphEnvironment:
     """
-    Wraps a GRBench knowledge graph and exposes four ReAct-compatible tool methods.
+    Wraps a graph backend and exposes four ReAct-compatible tool methods.
 
-    The graph must be in one of these formats:
-      - JSON: nested dict  {node_type: {node_id: {features: {...}, neighbors: {...}}}}
-      - Pickle: same structure serialised with pickle
+    By default, it uses JsonPickleGraphStore for JSON/pickle files and
+    RdfOwlXmlGraphStore for .rdf/.owl/.xml files. You can also pass a custom
+    GraphNodeStore to load nodes from other sources (e.g., Neo4j or APIs).
 
     A FAISS index over node-name embeddings is built on first use and cached.
     """
 
     def __init__(
         self,
-        graph_path: str | Path,
+        graph_path: str | Path | None,
         faiss_cache_dir: str | Path,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         top_k: int = 1,
+        node_store: Optional[GraphNodeStore] = None,
     ) -> None:
-        self.graph_path = Path(graph_path)
+        if graph_path is None and node_store is None:
+            raise ValueError("graph_path is required when node_store is not provided")
+        self.graph_path = Path(graph_path) if graph_path is not None else Path(node_store.identity)
         self.faiss_cache_dir = Path(faiss_cache_dir)
         self.embedding_model_name = embedding_model
         self.top_k = top_k
+        self.node_store = node_store or _make_default_node_store(self.graph_path)
 
         # Will be populated by _load_graph()
         self.graph: dict = {}
@@ -127,49 +312,23 @@ class GraphEnvironment:
     # ------------------------------------------------------------------
 
     def _load_graph(self) -> None:
-        """Load graph from JSON or pickle and build a flat node index."""
-        if not self.graph_path.exists():
-            raise FileNotFoundError(
-                f"Graph file not found: {self.graph_path}\n"
-                "Download the healthcare graph from:\n"
-                "  https://drive.google.com/drive/folders/1DJIgRZ3G-TOf7h0-Xub5_sE4slBUEqy9\n"
-                f"Then place it at: {self.graph_path}"
-            )
-
-        suffix = self.graph_path.suffix.lower()
-        if suffix == ".json":
-            with open(self.graph_path, "r", encoding="utf-8") as f:
-                self.graph = json.load(f)
-        elif suffix in (".pkl", ".pickle"):
-            with open(self.graph_path, "rb") as f:
-                self.graph = pickle.load(f)
-        else:
-            # Try JSON first, then pickle
-            try:
-                with open(self.graph_path, "r", encoding="utf-8") as f:
-                    self.graph = json.load(f)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                with open(self.graph_path, "rb") as f:
-                    self.graph = pickle.load(f)
-
+        """Load graph from the configured GraphNodeStore and build flat indexes."""
         seen: set[str] = set()
-        for node_type, nodes in self.graph.items():
-            if not isinstance(nodes, dict):
+        self.graph = getattr(self.node_store, "graph", {})
+        for nid, node_type, node_data in self.node_store.iter_nodes():
+            if nid in seen:
+                logger.warning("Duplicate node ID %s in type %s; skipping", nid, node_type)
                 continue
-            for nid, node_data in nodes.items():
-                if nid in seen:
-                    logger.warning("Duplicate node ID %s in type %s; skipping", nid, node_type)
-                    continue
-                seen.add(nid)
-                self.graph_index[nid] = node_data
-                self.doc_lookup.append(nid)
-                self.doc_type.append(node_type)
+            seen.add(nid)
+            self.graph_index[nid] = node_data
+            self.doc_lookup.append(nid)
+            self.doc_type.append(node_type)
 
         logger.info(
             "Graph loaded: %d nodes across %d types from %s",
             len(self.graph_index),
             len(self.graph),
-            self.graph_path,
+            self.node_store.identity,
         )
 
     # ------------------------------------------------------------------
@@ -196,7 +355,8 @@ class GraphEnvironment:
 
         self.faiss_cache_dir.mkdir(parents=True, exist_ok=True)
         safe_name = self.embedding_model_name.replace("/", "_")
-        fingerprint = _graph_fingerprint(str(self.graph_path))
+        fingerprint_source = getattr(getattr(self, "node_store", None), "identity", str(self.graph_path))
+        fingerprint = _graph_fingerprint(fingerprint_source)
         cache_file = self.faiss_cache_dir / f"faiss_{safe_name}_{fingerprint}.pkl"
         logger.info(
             "FAISS cache key: model=%s graph_fingerprint=%s path=%s",
