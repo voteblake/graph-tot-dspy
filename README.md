@@ -177,6 +177,37 @@ load_compiled_solver(solver, "./compiled/solver.json")
 result = solver(question="What compounds treat diabetes mellitus?")
 ```
 
+
+### Bring your own graph backend
+
+`GraphToTSolver` only needs a graph object that exposes the four tool methods (`retrieve_node`, `node_feature`, `neighbour_check`, `node_degree`) plus `get_tools()`.
+
+This package now exposes:
+- `GraphToolInterface` — protocol describing that tool contract
+- `GraphNodeStore` — abstract loader for node data from any source
+- `JsonPickleGraphStore` — default implementation for current GRBench JSON/pickle files
+
+So you can integrate domain-specific backends such as Neo4j, RDF/OWL parsers, or custom services by implementing a `GraphNodeStore` (or directly implementing `GraphToolInterface`).
+
+```python
+from graph_tot import GraphEnvironment, GraphNodeStore
+
+class Neo4jStore(GraphNodeStore):
+    @property
+    def identity(self) -> str:
+        return "neo4j://my-db/v1"
+
+    def iter_nodes(self):
+        # yield (node_id, node_type, node_data={"features": ..., "neighbors": ...})
+        ...
+
+env = GraphEnvironment(
+    graph_path=None,
+    faiss_cache_dir="./data/cache",
+    node_store=Neo4jStore(),
+)
+```
+
 ---
 
 ## Project structure
