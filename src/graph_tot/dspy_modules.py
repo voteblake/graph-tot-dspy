@@ -19,6 +19,8 @@ from typing import TypedDict
 import dspy
 import litellm
 
+from .graph_env import GraphToolInterface
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,7 +116,7 @@ class GraphToTAgent(dspy.Module):
     to produce diverse candidate reasoning traces for beam search.
     """
 
-    def __init__(self, graph_env, max_iters: int = 10) -> None:
+    def __init__(self, graph_env: GraphToolInterface, max_iters: int = 10) -> None:
         super().__init__()
         self.graph_env = graph_env
         self.react = dspy.ReAct(
@@ -274,7 +276,7 @@ class GraphToTSolver(dspy.Module):
       5. Return the best branch's answer directly.
 
     Parameters:
-      graph_env  : GraphEnvironment instance with the 4 graph tools.
+      graph_env  : Any GraphToolInterface implementation with the 4 graph tools.
       k          : Branching factor — number of independent agent calls per round.
       b          : Beam width — number of branches kept after scoring.
       max_rounds : Number of beam search rounds (1 = single-pass ToT).
@@ -287,7 +289,7 @@ class GraphToTSolver(dspy.Module):
 
     def __init__(
         self,
-        graph_env,
+        graph_env: GraphToolInterface,
         k: int = 3,
         b: int = 1,
         max_rounds: int = 1,

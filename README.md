@@ -177,6 +177,62 @@ load_compiled_solver(solver, "./compiled/solver.json")
 result = solver(question="What compounds treat diabetes mellitus?")
 ```
 
+
+### Bring your own graph backend
+
+`GraphToTSolver` only needs a graph object that exposes the four tool methods (`retrieve_node`, `node_feature`, `neighbour_check`, `node_degree`) plus `get_tools()`.
+
+This package now exposes:
+- `GraphToolInterface` — protocol describing that tool contract
+- `GraphNodeStore` — abstract loader for node data from any source
+- `JsonPickleGraphStore` — default implementation for current GRBench JSON/pickle files
+
+Important: `GraphNodeStore.iter_nodes()` is only required when you use `GraphEnvironment` (which builds a FAISS retrieval index over node text). For very large or remote graphs, you can skip `GraphEnvironment` entirely and pass your own `GraphToolInterface` implementation to `GraphToTSolver` so tool calls execute lazily against your backend.
+
+```python
+from graph_tot import GraphEnvironment, GraphNodeStore
+
+class Neo4jStore(GraphNodeStore):
+    @property
+    def identity(self) -> str:
+        return "neo4j://my-db/v1"
+
+    def iter_nodes(self):
+        # yield (node_id, node_type, node_data={"features": ..., "neighbors": ...})
+        ...
+
+env = GraphEnvironment(
+    graph_path=None,
+    faiss_cache_dir="./data/cache",
+    node_store=Neo4jStore(),
+)
+```
+
+For large remote graphs, implement tools directly (no full-graph preload):
+
+```python
+from graph_tot import GraphToTSolver, GraphToolInterface
+
+class RemoteGraphBackend(GraphToolInterface):
+    def retrieve_node(self, keyword: str) -> str:
+        # Query Neo4j/vector index service on demand
+        ...
+
+    def node_feature(self, node_id: str, feature: str) -> str:
+        ...
+
+    def neighbour_check(self, node_id: str, neighbor_type: str) -> str:
+        ...
+
+    def node_degree(self, node_id: str, neighbor_type: str) -> str:
+        ...
+
+    def get_tools(self):
+        return [self.retrieve_node, self.node_feature, self.neighbour_check, self.node_degree]
+
+solver = GraphToTSolver(graph_env=RemoteGraphBackend(), k=3, b=1)
+```
+
 ---
 
 ## Project structure
