@@ -7,8 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  seed-cache:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
   lint:
     runs-on: ubuntu-latest
+    needs: seed-cache
 
     steps:
       - name: Checkout repository
@@ -36,6 +50,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    needs: seed-cache
 
     steps:
       - name: Checkout repository
