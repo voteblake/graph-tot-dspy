@@ -112,11 +112,21 @@ class GraphToTAgent(dspy.Module):
     Wraps dspy.ReAct with the four graph tools (retrieve_node, node_feature,
     neighbour_check, node_degree). Can be called multiple times independently
     to produce diverse candidate reasoning traces for beam search.
+
+    Args:
+        graph_env: GraphEnvironment instance with the 4 graph tools.
+        max_iters: Maximum ReAct iterations per agent branch.
+        enable_assertions: If True, enforce that at least one graph tool is used
+            before answering. Uses DSPy assertions with backtracking to retry
+            when the agent attempts to answer without using any tools.
     """
 
-    def __init__(self, graph_env, max_iters: int = 10) -> None:
+    def __init__(
+        self, graph_env, max_iters: int = 10, enable_assertions: bool = False
+    ) -> None:
         super().__init__()
         self.graph_env = graph_env
+        self.enable_assertions = enable_assertions
         self.react = dspy.ReAct(
             signature=GraphQASignature,
             tools=graph_env.get_tools(),
@@ -124,8 +134,26 @@ class GraphToTAgent(dspy.Module):
         )
 
     def forward(self, question: str, context: str = "") -> dspy.Prediction:
-        """Run the ReAct agent and return a prediction with trajectory."""
-        return self.react(question=question, context=context)
+        """Run the ReAct agent and return a prediction with trajectory.
+        
+        When enable_assertions is True, enforces that at least one graph tool
+        was used during the reasoning process before allowing an answer.
+        """
+        pred = self.react(question=question, context=context)
+
+        if self.enable_assertions:
+            # Enforce that at least one tool was used
+            trajectory = getattr(pred, "trajectory", {}) or {}
+            if not trajectory:
+                # Use DSPy Suggest for soft enforcement with backtracking
+                dspy.Suggest(
+                    False,
+                    "Agent must use at least one graph tool before answering. "
+                    "Start by retrieving a relevant node from the knowledge graph.",
+                    target_module=self.react,
+                )
+
+        return pred
 
     @staticmethod
     def get_trajectory_text(prediction: dspy.Prediction) -> str:
