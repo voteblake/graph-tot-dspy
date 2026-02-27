@@ -306,8 +306,17 @@ class GraphToTSolver(dspy.Module):
         self.graph_env = graph_env
         self.max_iters = max_iters
 
-        self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
+        # Lazy agent initialization - only created when needed (sequential mode)
+        # In parallel mode, each branch creates its own agent in _generate_single_branch
+        self._agent = None
         self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode, max_trace_chars_per_candidate=max_trace_chars_per_candidate)
+
+    @property
+    def agent(self):
+        """Lazily initialize agent to avoid waste in parallel mode."""
+        if self._agent is None:
+            self._agent = GraphToTAgent(graph_env=self.graph_env, max_iters=self.max_iters)
+        return self._agent
 
     def forward(self, question: str) -> dspy.Prediction:
         """
