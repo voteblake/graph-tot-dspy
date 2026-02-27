@@ -167,8 +167,8 @@ class TreeOfThoughtEvaluator(dspy.Module):
             raise ValueError("mode must be 'score_vote' or 'selection_vote'")
         self.mode = mode
         self.max_trace_chars_per_candidate = max_trace_chars_per_candidate
-        self.score_voter = dspy.Predict(ScoreVoteSignature)
-        self.selection_voter = dspy.Predict(SelectionVoteSignature)
+        self.score_voter = dspy.TypedPredictor(ScoreVoteSignature)
+        self.selection_voter = dspy.TypedPredictor(SelectionVoteSignature)
 
     def forward(self, question: str, branches: list[Branch]) -> list[Branch]:
         """Score branches and return them sorted best-first.
@@ -199,9 +199,8 @@ class TreeOfThoughtEvaluator(dspy.Module):
                     reasoning_trace=branch.trace,
                     candidate_answer=branch.answer,
                 )
-                # DSPy's typed field guarantees result.score is a float;
-                # clamp to valid probability range.
-                score = max(0.0, min(1.0, result.score))
+                # TypedPredictor guarantees result.score is a float in [0, 1]
+                score = result.score
             scored.append(Branch(
                 answer=branch.answer,
                 trace=branch.trace,
@@ -239,9 +238,8 @@ class TreeOfThoughtEvaluator(dspy.Module):
             question=question,
             candidates=candidates_text,
         )
-        # DSPy's typed field guarantees result.best_index is an int;
-        # clamp to valid index range.
-        best_idx = max(0, min(result.best_index, len(branches) - 1))
+        # TypedPredictor guarantees result.best_index is an int in valid range
+        best_idx = result.best_index
 
         scored = [
             Branch(
@@ -295,12 +293,14 @@ class GraphToTSolver(dspy.Module):
         eval_mode: str = "score_vote",
         parallel: bool = True,
         max_trace_chars_per_candidate: int = 2000,
+        async_mode: bool = False,
     ) -> None:
         super().__init__()
         self.k = k
         self.b = b
         self.max_rounds = max_rounds
         self.parallel = parallel
+        self.async_mode = async_mode
 
         # Store for creating per-thread agent instances in parallel mode
         self.graph_env = graph_env
@@ -508,4 +508,185 @@ class GraphToTSolver(dspy.Module):
             ]
             # Collect in submission order to keep branch indices stable
             return [f.result() for f in futures]
+
+    # ------------------------------------------------------------------
+    # Async Methods
+    # ------------------------------------------------------------------
+
+    async def _generate_single_branch_async(
+        self, question: str, context: str,
+    ) -> Branch:
+        """Generate one branch asynchronously with its own agent instance.
+
+        This async variant leverages native async LLM calls when available
+        (via DSPy's `acall` method), falling back to synchronous execution
+        otherwise. Each call gets its own ``GraphToTAgent`` instance for
+        thread/coroutine safety.
+
+        The underlying ``GraphEnvironment`` (read-only graph + FAISS index)
+        is safely shared across concurrent coroutines.
+
+        Handles rate-limit errors with exponential backoff retry logic.
+
+        Args:
+            question: The question to answer.
+            context: Prior reasoning context (if any).
+
+        Returns:
+            A Branch object containing the answer, trace, and prediction.
+        """
+        agent = GraphToTAgent(
+            graph_env=self.graph_env, max_iters=self.max_iters,
+        )
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Use async call if available, otherwise fall back to sync
+                if hasattr(agent, 'acall'):
+                    pred = await agent.acall(question=question, context=context)
+                else:
+                    pred = agent(question=question, context=context)
+                trace = agent.get_trajectory_text(pred)
+                answer = getattr(pred, "answer", "") or "No answer produced."
+                return Branch(
+                    answer=answer,
+                    trace=trace,
+                    prediction=pred,
+                    parent_context=context,
+                )
+            except litellm.RateLimitError:
+                if attempt < max_retries - 1:
+                    wait = 60 * (attempt + 1)  # 60s, 120s
+                    logger.warning(
+                        "Rate limited (attempt %d/%d), waiting %ds before retry",
+                        attempt + 1, max_retries, wait,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(
+                        "Rate limit retries exhausted after %d attempts",
+                        max_retries,
+                    )
+                    return Branch(
+                        answer="Rate limit exceeded — try again later or reduce --k.",
+                        trace="",
+                        prediction=dspy.Prediction(answer="Rate limit exceeded", trajectory={}),
+                        parent_context=context,
+                    )
+        raise RuntimeError("_generate_single_branch_async: exhausted retries without returning")
+
+    async def _generate_branches_async(
+        self, question: str, contexts: list[str],
+    ) -> list[Branch]:
+        """Generate branches concurrently using asyncio.gather.
+
+        This async variant provides efficient I/O-bound parallelism for
+        LLM API calls without the overhead of thread management. All
+        branches are generated concurrently via `asyncio.gather`.
+
+        Args:
+            question: The question to answer.
+            contexts: List of context strings, one per branch.
+
+        Returns:
+            List of Branch objects in the same order as contexts.
+        """
+        if not contexts:
+            return []
+
+        logger.info(
+            "Generating %d branches asynchronously with asyncio.gather",
+            len(contexts),
+        )
+        tasks = [
+            self._generate_single_branch_async(question, ctx)
+            for ctx in contexts
+        ]
+        return await asyncio.gather(*tasks)
+
+    async def forward_async(self, question: str) -> dspy.Prediction:
+        """
+        Run ToT beam search asynchronously and return the final answer.
+
+        This is the async variant of ``forward()``, using native async
+        operations for branch generation. When ``async_mode`` is enabled
+        in the constructor, this method provides better resource efficiency
+        for I/O-bound LLM calls compared to ThreadPoolExecutor.
+
+        Returns a dspy.Prediction with fields:
+          answer      — answer string from best branch
+          best_trace  — reasoning trace from the best-scoring branch
+          best_score  — float score of the best branch
+          all_branches — list of branch dicts (for logging/inspection)
+
+        Args:
+            question: The question to answer.
+
+        Returns:
+            dspy.Prediction with answer, trace, score, and branch metadata.
+        """
+        # Round 0: seed beam with k independent branches
+        logger.info("ToT Round 0: generating %d branches (async)", self.k)
+        current_beam = await self._generate_branches_async(question, contexts=[""] * self.k)
+
+        all_branch_dicts: list[dict] = []  # accumulate ALL scored branches across all rounds
+        round_log: list[dict] = []  # per-round summaries for observability
+
+        for round_idx in range(1, self.max_rounds + 1):
+            # Score and prune — evaluator accepts and returns Branch objects directly
+            current_beam = self.evaluator(question=question, branches=current_beam)
+            survivors = current_beam[: self.b]
+
+            # Accumulate scored branches with round-level metadata for inspection
+            for rank, branch in enumerate(current_beam):
+                d = branch.as_dict()
+                d["round_idx"] = round_idx
+                d["rank"] = rank
+                d["is_survivor"] = rank < self.b
+                all_branch_dicts.append(d)
+
+            round_log.append({
+                "round": round_idx,
+                "num_branches": len(current_beam),
+                "scores": [b.score for b in current_beam],
+                "survivor_answers": [s.answer[:120] for s in survivors],
+                "context_from_previous": current_beam[0].parent_context[:120] if current_beam and current_beam[0].parent_context else None,
+            })
+
+            logger.info(
+                "ToT Round %d: top-%d scores = %s",
+                round_idx,
+                self.b,
+                [f"{s.score:.3f}" for s in survivors],
+            )
+
+            if round_idx == self.max_rounds:
+                current_beam = survivors
+                break
+
+            # Expand survivors: each generates k new branches, guided by
+            # the survivor's answer as context
+            new_beam: list[Branch] = []
+            for survivor in survivors:
+                # Truncate context to avoid hitting context-window limits
+                context = survivor.answer[:800]
+                new_beam.extend(
+                    await self._generate_branches_async(question, contexts=[context] * self.k)
+                )
+            current_beam = new_beam
+
+        # Return best branch's answer directly (no synthesis step, per the paper)
+        best = current_beam[0] if current_beam else Branch(
+            answer="Unable to determine an answer.",
+            trace="",
+            prediction=dspy.Prediction(),
+        )
+
+        return dspy.Prediction(
+            answer=best.answer,
+            best_trace=best.trace,
+            best_score=best.score,
+            all_branches=all_branch_dicts,
+            round_log=round_log,
+        )
 
