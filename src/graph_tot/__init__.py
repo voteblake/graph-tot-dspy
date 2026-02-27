@@ -1,5 +1,5 @@
 from .graph_env import GraphEnvironment, ToolResult, ErrorCode
-from .dspy_modules import GraphToTSolver, GraphToTAgent, TreeOfThoughtEvaluator, BranchDict
+from .dspy_modules import GraphToTSolver, GraphToTAgent, TreeOfThoughtEvaluator, BranchDict, ToTConfig
 from .data_loader import (
     load_grbench_qa, find_graph_file, check_graph_available,
     make_dspy_examples, train_val_split,
@@ -13,6 +13,7 @@ __all__ = [
     "GraphToTSolver",
     "GraphToTAgent",
     "TreeOfThoughtEvaluator",
+    "ToTConfig",
     # Structured tool result types
     "BranchDict",
     "ToolResult",

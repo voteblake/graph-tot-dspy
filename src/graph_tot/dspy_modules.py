@@ -14,12 +14,37 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 import dspy
 import litellm
 
 logger = logging.getLogger(__name__)
+
+
+# ===========================================================================
+# Configuration
+# ===========================================================================
+
+
+@dataclass
+class ToTConfig:
+    """Configuration for GraphToTSolver beam search parameters."""
+    k: int = 3
+    b: int = 1  
+    max_rounds: int = 1
+    max_iters: int = 8
+    eval_mode: Literal["score_vote", "selection_vote"] = "score_vote"
+    parallel: bool = True
+    max_trace_chars_per_candidate: int = 2000
+    
+    def __post_init__(self):
+        if self.k < 1:
+            raise ValueError("k must be >= 1")
+        if self.b > self.k:
+            raise ValueError("b (beam width) cannot exceed k (branching factor)")
+        if self.max_rounds < 1:
+            raise ValueError("max_rounds must be >= 1")
 
 
 # ===========================================================================
@@ -288,6 +313,7 @@ class GraphToTSolver(dspy.Module):
     def __init__(
         self,
         graph_env,
+        config: ToTConfig | None = None,
         k: int = 3,
         b: int = 1,
         max_rounds: int = 1,
@@ -297,17 +323,28 @@ class GraphToTSolver(dspy.Module):
         max_trace_chars_per_candidate: int = 2000,
     ) -> None:
         super().__init__()
-        self.k = k
-        self.b = b
-        self.max_rounds = max_rounds
-        self.parallel = parallel
+        if config is not None:
+            self.k = config.k
+            self.b = config.b
+            self.max_rounds = config.max_rounds
+            self.max_iters = config.max_iters
+            self.parallel = config.parallel
+            _eval_mode = config.eval_mode
+            _max_trace_chars = config.max_trace_chars_per_candidate
+        else:
+            self.k = k
+            self.b = b
+            self.max_rounds = max_rounds
+            self.max_iters = max_iters
+            self.parallel = parallel
+            _eval_mode = eval_mode
+            _max_trace_chars = max_trace_chars_per_candidate
 
         # Store for creating per-thread agent instances in parallel mode
         self.graph_env = graph_env
-        self.max_iters = max_iters
 
-        self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
-        self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode, max_trace_chars_per_candidate=max_trace_chars_per_candidate)
+        self.agent = GraphToTAgent(graph_env=graph_env, max_iters=self.max_iters)
+        self.evaluator = TreeOfThoughtEvaluator(mode=_eval_mode, max_trace_chars_per_candidate=_max_trace_chars)
 
     def forward(self, question: str) -> dspy.Prediction:
         """
