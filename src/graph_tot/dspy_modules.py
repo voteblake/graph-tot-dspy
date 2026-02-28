@@ -1,3 +1,5 @@
+bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+bash: no job control in this shell
 """
 DSPy modules implementing Graph Tree-of-Thought with Agent-based retrieval.
 
@@ -317,6 +319,11 @@ class GraphToTSolver(dspy.Module):
         if self._agent is None:
             self._agent = GraphToTAgent(graph_env=self.graph_env, max_iters=self.max_iters)
         return self._agent
+
+    @agent.setter
+    def agent(self, value):
+        """Allow setting the agent (for testing/mocking)."""
+        self._agent = value
 
     def forward(self, question: str) -> dspy.Prediction:
         """
