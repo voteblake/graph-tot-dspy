@@ -1,3 +1,9 @@
+bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+bash: no job control in this shell
+bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+bash: no job control in this shell
+bash: cannot set terminal process group (-1): Inappropriate ioctl for device
+bash: no job control in this shell
 """
 DSPy modules implementing Graph Tree-of-Thought with Agent-based retrieval.
 
@@ -167,8 +173,8 @@ class TreeOfThoughtEvaluator(dspy.Module):
             raise ValueError("mode must be 'score_vote' or 'selection_vote'")
         self.mode = mode
         self.max_trace_chars_per_candidate = max_trace_chars_per_candidate
-        self.score_voter = dspy.TypedPredictor(ScoreVoteSignature)
-        self.selection_voter = dspy.TypedPredictor(SelectionVoteSignature)
+        self.score_voter = dspy.Predict(ScoreVoteSignature)
+        self.selection_voter = dspy.Predict(SelectionVoteSignature)
 
     def forward(self, question: str, branches: list[Branch]) -> list[Branch]:
         """Score branches and return them sorted best-first.
@@ -199,8 +205,9 @@ class TreeOfThoughtEvaluator(dspy.Module):
                     reasoning_trace=branch.trace,
                     candidate_answer=branch.answer,
                 )
-                # TypedPredictor guarantees result.score is a float in [0, 1]
-                score = result.score
+                # DSPy's typed field guarantees result.score is a float;
+                # clamp to valid probability range.
+                score = max(0.0, min(1.0, result.score))
             scored.append(Branch(
                 answer=branch.answer,
                 trace=branch.trace,
@@ -238,8 +245,9 @@ class TreeOfThoughtEvaluator(dspy.Module):
             question=question,
             candidates=candidates_text,
         )
-        # TypedPredictor guarantees result.best_index is an int in valid range
-        best_idx = result.best_index
+        # DSPy's typed field guarantees result.best_index is an int;
+        # clamp to valid index range.
+        best_idx = max(0, min(result.best_index, len(branches) - 1))
 
         scored = [
             Branch(
