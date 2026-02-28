@@ -11,6 +11,7 @@ Architecture:
 """
 
 import logging
+import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -309,6 +310,14 @@ class GraphToTSolver(dspy.Module):
         self.agent = GraphToTAgent(graph_env=graph_env, max_iters=max_iters)
         self.evaluator = TreeOfThoughtEvaluator(mode=eval_mode, max_trace_chars_per_candidate=max_trace_chars_per_candidate)
 
+    @staticmethod
+    def _calculate_backoff(attempt: int, base: float = 30.0, max_wait: float = 300.0) -> float:
+        """Calculate exponential backoff with jitter for rate limit retries."""
+        exponential = base * (2 ** attempt)
+        capped = min(exponential, max_wait)
+        jitter = capped * (0.5 + random.random() * 0.5)
+        return jitter
+
     def forward(self, question: str) -> dspy.Prediction:
         """
         Run ToT beam search and return the final answer.
@@ -408,7 +417,7 @@ class GraphToTSolver(dspy.Module):
         """Generate branches one at a time using the shared agent instance."""
         branches: list[Branch] = []
         for context in contexts:
-            max_retries = 3
+            max_retries = 5
             for attempt in range(max_retries):
                 try:
                     pred = self.agent(question=question, context=context)
@@ -423,7 +432,7 @@ class GraphToTSolver(dspy.Module):
                     break
                 except litellm.RateLimitError:
                     if attempt < max_retries - 1:
-                        wait = 60 * (attempt + 1)
+                        wait = self._calculate_backoff(attempt)
                         logger.warning(
                             "Rate limited (attempt %d/%d), waiting %ds before retry",
                             attempt + 1, max_retries, wait,
@@ -455,7 +464,7 @@ class GraphToTSolver(dspy.Module):
         agent = GraphToTAgent(
             graph_env=self.graph_env, max_iters=self.max_iters,
         )
-        max_retries = 3
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 pred = agent(question=question, context=context)
@@ -469,7 +478,7 @@ class GraphToTSolver(dspy.Module):
                 )
             except litellm.RateLimitError:
                 if attempt < max_retries - 1:
-                    wait = 60 * (attempt + 1)  # 60s, 120s
+                    wait = self._calculate_backoff(attempt)
                     logger.warning(
                         "Rate limited (attempt %d/%d), waiting %ds before retry",
                         attempt + 1, max_retries, wait,

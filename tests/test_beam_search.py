@@ -473,3 +473,22 @@ class TestBranchHistoryAccumulation:
         assert d["score"] == pytest.approx(0.75)
         assert d["trace"] == "t"
         assert d["parent_context"] == "ctx"
+
+
+# ---------------------------------------------------------------------------
+# Backoff calculation: exponential backoff with jitter
+# ---------------------------------------------------------------------------
+
+
+class TestBackoffCalculation:
+    def test_backoff_increases_with_attempts(self, make_solver):
+        solver, _ = make_solver()
+        waits = [solver._calculate_backoff(i) for i in range(5)]
+        assert waits == sorted(waits)  # Should be increasing
+        assert all(0 < w <= 300 for w in waits)  # Within bounds
+    
+    def test_backoff_has_jitter(self, make_solver):
+        solver, _ = make_solver()
+        # Same attempt should give different values due to jitter
+        waits = [solver._calculate_backoff(2) for _ in range(10)]
+        assert len(set(waits)) > 1  # Not all the same
